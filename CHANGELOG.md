@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2
+
+- Needs you rows say how many requests they group ("36 approvals waiting").
+- Pending approvals beyond the newest 50 activity items are counted in an
+  "Older approvals" row instead of being missed.
+- Setup steps for a new CLI context include `lobu context add`.
+
 ## 0.1.1
 
 - Fix git installs: match the plugin SDK's `@types/better-sqlite3` peer range.

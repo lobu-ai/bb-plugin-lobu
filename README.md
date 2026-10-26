@@ -10,7 +10,9 @@ A [bb](https://getbb.app) plugin that shows what needs you across your
 A **Lobu** page in the bb sidebar with five cards, grouped by workspace:
 
 - **Needs you**: pending approvals and Automations that are due. Identical
-  requests collapse into one row that links to all of them.
+  requests collapse into one row ("36 approvals waiting") that links to all of
+  them. Approvals older than the newest 50 activity items are counted in an
+  "Older approvals" row.
 - **Failed runs**: Automation and feed failures from the last 24 hours.
   Failed ad-hoc agent tool calls are left out.
 - **Connections & devices**: connections and feeds that need attention, and
@@ -59,7 +61,7 @@ Open them in bb under Settings → Plugins → Lobu, or use `bb plugin config lo
 
 | Setting | Default | Description |
 |---|---|---|
-| `contexts` | empty | Comma-separated `lobu` CLI contexts. Empty uses the CLI's active context. A login only covers the workspaces you authorized; add another with `lobu login --context <name>` and list it here. |
+| `contexts` | empty | Comma-separated `lobu` CLI contexts. Empty uses the CLI's active context. A login only covers the workspaces you authorized; add another with `lobu context add <name> --url https://app.lobu.ai/api/v1` and `lobu login --context <name>`, then list it here. |
 | `hiddenWorkspaces` | empty | Comma-separated workspace slugs to leave out. |
 | `metrics` | `[]` | JSON array of metric queries, for example `[{"workspace":"acme","entity_type":"company","measure":"spend","by":["month"],"label":"Spend by month"}]`. |
 | `baseUrl` | `https://app.lobu.ai` | Change only for a self-hosted Lobu. |
@@ -71,8 +73,9 @@ Open them in bb under Settings → Plugins → Lobu, or use `bb plugin config lo
   already seen, so it measures sync volume rather than new data.
 - The 24-hour activity scan reads at most the newest 3,000 feed runs per
   workspace and says so when it hits that cap.
-- "Needs you" reads the 50 newest activity items per workspace, the largest
-  page Lobu returns.
+- "Needs you" groups the 50 newest activity items per workspace, the largest
+  page Lobu returns, and counts every pending approval separately so none are
+  missed.
 
 ## Development
 

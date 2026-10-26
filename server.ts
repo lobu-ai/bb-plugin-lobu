@@ -29,7 +29,7 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "Lobu CLI contexts",
       description:
-        "Comma-separated `lobu` CLI contexts to read. Leave empty for the CLI's active context. Every workspace a login is authorized for appears. Add one with `lobu login --context <name>`.",
+        "Comma-separated `lobu` CLI contexts to read. Leave empty for the CLI's active context. Every workspace a login is authorized for appears. Add one with `lobu context add <name> --url https://app.lobu.ai/api/v1`, then `lobu login --context <name>`.",
       default: "",
     },
     hiddenWorkspaces: {

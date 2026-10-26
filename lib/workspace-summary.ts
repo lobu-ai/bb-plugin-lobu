@@ -88,10 +88,12 @@ export async function summarizeWorkspace(
     return { runs, truncated: true };
   };
 
-  const [activity, failed, connections, failingFeeds, automations, syncs, automationRuns, catalog] =
+  const [activity, approvals, failed, connections, failingFeeds, automations, syncs, automationRuns, catalog] =
     await Promise.all([
       // 50 is the largest page listActivity accepts.
       safe(() => client.operations.listActivity({ limit: 50 })),
+      // The activity page can miss approvals; listRuns counts all of them.
+      safe(() => client.operations.listRuns({ approval_status: "pending", limit: 1 })),
       safe(() => client.operations.listRuns({ status: "failed", created_after: since, limit: 200 })),
       safe(() => client.connections.list({ limit: 200 })),
       safe(() => client.feeds.list({ health: "failing", limit: 50 })),
@@ -132,16 +134,31 @@ export async function summarizeWorkspace(
       count: 1,
       runIds: item.run_id ? [item.run_id] : [],
       href: item.href || null,
-      detail: item.kind === "automation_due" ? "Automation due" : item.interaction_type || item.status || null,
+      due: item.kind === "automation_due",
+      noun: item.kind === "automation_due" ? "Automation" : item.interaction_type || "request",
     });
   }
+  const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
   const needsYou = [...pending.values()].map((group) => ({
     title: group.title,
-    detail: group.detail,
+    detail: `${plural(group.count, group.noun)} ${group.due ? "due" : "waiting"}`,
     at: group.at,
     count: group.count,
     path: group.runIds.length > 1 ? runsPath(group.runIds) : group.href,
   }));
+  const listedApprovals = [...pending.values()]
+    .filter((group) => group.noun === "approval")
+    .reduce((sum, group) => sum + group.count, 0);
+  const unlisted = ((approvals && approvals.total) || 0) - listedApprovals;
+  if (unlisted > 0) {
+    needsYou.push({
+      title: "Older approvals",
+      detail: `${plural(unlisted, "approval")} waiting beyond the newest activity`,
+      at: null,
+      count: unlisted,
+      path: null,
+    });
+  }
 
   // Failed runs: Automation and feed runs only. Ad-hoc tool calls fail
   // routinely while an agent works and would drown the real failures.

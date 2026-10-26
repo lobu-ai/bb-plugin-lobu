@@ -11,7 +11,7 @@ const NOW = Date.parse("2026-01-15T12:00:00.000Z");
 const HOUR = 3600 * 1000;
 const at = (hoursAgo: number) => new Date(NOW - hoursAgo * HOUR).toISOString();
 
-function fakeClient(overrides: Record<string, unknown> = {}) {
+function fakeClient(overrides: Record<string, unknown> = {}, { pendingApprovals = 2 } = {}) {
   const calls: { method: string; input: any }[] = [];
   const syncRuns = [
     { id: 1, feed_id: 10, connector_key: "gmail", connection_display_name: "Gmail", feed_display_name: "Inbox", items_collected: 40, created_at: at(1) },
@@ -35,6 +35,7 @@ function fakeClient(overrides: Record<string, unknown> = {}) {
       },
       listRuns: async (input: any) => {
         calls.push({ method: "listRuns", input });
+        if (input.approval_status === "pending") return { runs: [], total: pendingApprovals, has_more: pendingApprovals > 1 };
         if (input.status === "failed") {
           return {
             runs: [
@@ -107,10 +108,22 @@ describe("summarizeWorkspace", () => {
     const { client } = fakeClient();
     const summary = await summarizeWorkspace(client, options());
     expect(summary.needsYou).toEqual([
-      { title: "Review merge", detail: "approval", at: at(4), count: 2, path: "/events?run_ids=101,102" },
-      { title: "Weekly digest", detail: "Automation due", at: at(1), count: 1, path: "/acme/automations/7" },
+      { title: "Review merge", detail: "2 approvals waiting", at: at(4), count: 2, path: "/events?run_ids=101,102" },
+      { title: "Weekly digest", detail: "1 Automation due", at: at(1), count: 1, path: "/acme/automations/7" },
     ]);
     expect(summary.unreadCount).toBe(2);
+  });
+
+  test("counts approvals the activity page did not reach", async () => {
+    const { client } = fakeClient({}, { pendingApprovals: 75 });
+    const summary = await summarizeWorkspace(client, options());
+    expect(summary.needsYou.at(-1)).toEqual({
+      title: "Older approvals",
+      detail: "73 approvals waiting beyond the newest activity",
+      at: null,
+      count: 73,
+      path: null,
+    });
   });
 
   test("keeps Automation and feed failures and drops ad-hoc tool calls", async () => {
@@ -146,7 +159,10 @@ describe("summarizeWorkspace", () => {
       { title: "Morning briefing", detail: "**Two** new leads", at: at(3), path: "/acme/events?id=9" },
     ]);
     const since = new Date(NOW - 24 * HOUR).toISOString();
-    expect(calls.filter((c) => c.method === "listRuns").every((c) => c.input.created_after === since)).toBe(true);
+    // Pending approvals count regardless of age; every other run read is the last 24 hours.
+    const windowed = calls.filter((c) => c.method === "listRuns" && c.input.approval_status === undefined);
+    expect(windowed.length).toBeGreaterThan(0);
+    expect(windowed.every((c) => c.input.created_after === since)).toBe(true);
   });
 
   test("marks the sync scan truncated when it hits the page cap", async () => {

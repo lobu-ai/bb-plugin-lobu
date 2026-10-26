@@ -260,12 +260,20 @@ function SetupCard({ setup }: { setup: NonNullable<Snapshot["setup"]> }) {
         </p>
       ) : setup.code === "not_logged_in" ? (
         <p>
-          Run <Command>{login}</Command> in a terminal and approve the login in your browser, then refresh.
+          {setup.context === null ? null : (
+            <>
+              Add the context with <Command>{`lobu context add ${setup.context} --url https://app.lobu.ai/api/v1`}</Command>{" "}
+              if it is new, then run{" "}
+            </>
+          )}
+          {setup.context === null ? "Run " : null}
+          <Command>{login}</Command> in a terminal and approve the login in your browser, then refresh.
         </p>
       ) : (
         <p>
           Check the plugin's "Lobu CLI contexts" and "Hidden workspaces" settings, or log in to another workspace
-          with <Command>lobu login --context &lt;name&gt;</Command> and add that context.
+          with <Command>lobu context add &lt;name&gt; --url https://app.lobu.ai/api/v1</Command> and{" "}
+          <Command>lobu login --context &lt;name&gt;</Command>, then add that context.
         </p>
       )}
     </section>
@@ -320,7 +328,7 @@ export function DashboardPage() {
               count={total(workspaces, (w) => countOf(w.needsYou))}
             >
               {grouped(workspaces, (w) => w.needsYou, (item, i, w) => (
-                <ItemRow key={i} item={item} count={item.count} onAsk={() => ask(w.slug, "request", item)} />
+                <ItemRow key={i} item={item} onAsk={() => ask(w.slug, "request", item)} />
               ))}
             </Section>
             <Section
