@@ -1,0 +1,74 @@
+{
+  "name": "bb-plugin-lobu",
+  "version": "0.1.0",
+  "description": "Lobu in bb: approvals waiting on you, failed Automation and feed runs, unhealthy connections and devices, 24-hour activity, and pinned metrics across your Lobu workspaces.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lobu-ai/bb-plugin-lobu.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lobu-ai/bb-plugin-lobu/issues"
+  },
+  "homepage": "https://github.com/lobu-ai/bb-plugin-lobu#readme",
+  "engines": {
+    "bb": ">=0.46",
+    "bbPluginSdk": ">=0.6.49"
+  },
+  "bb": {
+    "name": "Lobu",
+    "description": "See what needs you across your Lobu workspaces: pending approvals, failed runs, unhealthy connections and devices, recent activity, and pinned metrics.",
+    "branding": {
+      "icon": "./icons/lobu.svg",
+      "logo": {
+        "light": "./icons/lobu-logo.svg"
+      },
+      "experimental_icons": {
+        "lobu": "./icons/lobu.svg",
+        "refresh": "./icons/refresh.svg",
+        "inbox": "./icons/inbox.svg",
+        "alert": "./icons/alert.svg",
+        "plug": "./icons/plug.svg",
+        "activity": "./icons/activity.svg",
+        "chart": "./icons/chart.svg"
+      }
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx",
+    "skills": []
+  },
+  "scripts": {
+    "generate": "bun scripts/generate-lobu-scripts.ts",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "bun test",
+    "build": "bun run generate && bb plugin build"
+  },
+  "files": [
+    "app.tsx",
+    "server.ts",
+    "components",
+    "lib",
+    "icons",
+    "components.json",
+    "tsconfig.json",
+    "dist"
+  ],
+  "dependencies": {
+    "@radix-ui/react-slot": "^1.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.6.49",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/bun": "^1.3.0",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "hono": "^4.13.14",
+    "tailwind-merge": "^3.4.0",
+    "typescript": "^5.7.0"
+  }
+}
