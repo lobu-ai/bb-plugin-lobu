@@ -1,7 +1,8 @@
 # Lobu for bb
 
 A [bb](https://getbb.app) plugin that shows what needs you across your
-[Lobu](https://lobu.ai) workspaces, without leaving bb.
+[Lobu](https://lobu.ai) workspaces, and saves what your agents learn to Lobu
+memory, without leaving bb.
 
 ![The Lobu page in bb](docs/screenshots/dashboard.jpg)
 
@@ -28,6 +29,39 @@ bb's New thread screen with a prompt about it; you pick the project and send.
 A one-line summary also appears on the New thread screen when something needs
 you.
 
+## Save to Lobu
+
+Agents in bb forget everything when a thread ends. Save to Lobu keeps the
+useful parts in your Lobu workspace memory, where any agent connected to Lobu
+can find them later with `search_memory`.
+
+![Reviewing proposed memories before they are saved](docs/screenshots/save-to-lobu.jpg)
+
+Nothing is saved until you review it. A form takes the place of the message
+box: untick what you don't want, edit the wording, pick the kind (fact,
+decision, preference, observation, or note) and the workspace, then choose
+**Save**. **Skip** saves nothing. Afterwards the thread shows what was saved,
+with links to each memory in Lobu.
+
+There are three ways to get there:
+
+- **The agent offers.** Agents get a `lobu_remember` tool and are asked to use
+  it when a task leaves something worth keeping, proposing a few short
+  memories at the end of the task. For example, after fixing a flaky deploy it might propose
+  "Staging deploys need the office VPN".
+- **Save a message.** Hover any message and choose **Save to Lobu**, or
+  highlight part of an answer and pick **Save to Lobu** from the selection
+  menu. The form opens with that text, so "remember this" is two clicks.
+- **Ask for a recap.** Choose **Save learnings to Lobu** from the thread's ⋯
+  menu. The agent looks back over the thread and proposes what is worth
+  keeping.
+
+The workspace defaults to the last one you saved to, or your personal
+workspace the first time. Saving the same memory twice from one thread stores it once.
+Agents pick up the `lobu_remember` tool when their session starts, so threads
+that were already open before you installed the plugin need a new thread
+first.
+
 ## Requirements
 
 - bb 0.46 or newer.
@@ -44,7 +78,7 @@ you.
 bb plugin install git:https://github.com/lobu-ai/bb-plugin-lobu.git
 ```
 
-## How it reads Lobu
+## How it talks to Lobu
 
 The plugin reuses your `lobu` CLI login. For each configured CLI context it
 runs `lobu token --raw`, asks Lobu which workspaces that login covers, and
@@ -52,8 +86,9 @@ makes one read-only `query_sdk` call per workspace. The summary is computed
 inside Lobu, so only the rows the page shows come back. Results are cached for
 a minute and the page refreshes every two minutes.
 
-Tokens stay in the bb server process. The page only receives the summary. The
-plugin never writes to Lobu.
+The only write is Save to Lobu, which calls Lobu's own `save_memory` for each
+memory you approve in the form. Tokens stay in the bb server process; the page
+only receives summaries and the form's contents.
 
 ## Settings
 

@@ -104,28 +104,48 @@ export function deviceItems(baseUrl: string, devices: RawDevice[]): DashboardIte
     }));
 }
 
-export async function buildSnapshot(api: LobuApi, config: SnapshotConfig): Promise<Snapshot> {
-  const { baseUrl } = config;
+export interface WorkspaceOwner {
+  context: string | null;
+  name: string;
+  personal: boolean;
+}
+
+/**
+ * Which workspaces each login covers, keyed by slug. The first context in
+ * `contexts` that lists a workspace reads it.
+ */
+export async function discoverWorkspaces(api: LobuApi, contexts: (string | null)[]) {
   const errors: string[] = [];
   let setup: Snapshot["setup"] = null;
-
-  // Which workspaces each login covers. The first context to list a workspace reads it.
-  const owners = new Map<string, { context: string | null; name: string }>();
-  await Promise.all(
-    config.contexts.map(async (context) => {
+  const listed = await Promise.all(
+    contexts.map(async (context) => {
       try {
-        for (const workspace of await api.workspaces(context)) {
-          if (!owners.has(workspace.slug)) owners.set(workspace.slug, { context, name: workspace.name });
-        }
+        return await api.workspaces(context);
       } catch (cause) {
         if (cause instanceof LobuSetupError) {
           setup ??= { code: cause.code, context: cause.context, message: cause.message };
         } else {
           errors.push(`${context ?? "active context"}: ${errorMessage(cause)}`);
         }
+        return [];
       }
     }),
   );
+  const owners = new Map<string, WorkspaceOwner>();
+  listed.forEach((workspaces, index) => {
+    const context = contexts[index] ?? null;
+    for (const { slug, name, personal } of workspaces) {
+      if (!owners.has(slug)) owners.set(slug, { context, name, personal });
+    }
+  });
+  return { owners, setup: setup as Snapshot["setup"], errors };
+}
+
+export async function buildSnapshot(api: LobuApi, config: SnapshotConfig): Promise<Snapshot> {
+  const { baseUrl } = config;
+  const discovered = await discoverWorkspaces(api, config.contexts);
+  const { owners, errors } = discovered;
+  let setup = discovered.setup;
 
   const visible = [...owners.entries()].filter(([slug]) => !config.hiddenWorkspaces.has(slug));
   if (visible.length === 0 && setup === null && errors.length === 0) {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- Save to Lobu: keep what agents learn in Lobu workspace memory. Agents
+  propose memories with the new `lobu_remember` tool, any message or selected
+  text can be saved from its action menu, and **Save learnings to Lobu** in the
+  thread menu asks the agent for a recap. Every save goes through a review form
+  where you untick, edit, and pick the kind and workspace first.
+
 ## 0.1.2
 
 - Needs you rows say how many requests they group ("36 approvals waiting").

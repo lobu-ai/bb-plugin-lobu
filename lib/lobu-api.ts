@@ -27,6 +27,21 @@ export class LobuSetupError extends Error {
 export interface Workspace {
   slug: string;
   name: string;
+  /** The user's personal workspace. */
+  personal: boolean;
+}
+
+/** The subset of save_memory's input the plugin sends. */
+export interface SaveMemoryInput {
+  title: string;
+  content: string;
+  semantic_type: string;
+  idempotency_key: string;
+}
+
+export interface SavedMemory {
+  id: number;
+  viewUrl: string | null;
 }
 
 export interface LobuApiOptions {
@@ -106,9 +121,27 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
     /** Workspaces the login for this CLI context is authorized for. */
     async workspaces(context: string | null): Promise<Workspace[]> {
       const info = (await request(context, "/oauth/userinfo")) as {
-        organizations?: { slug: string; name?: string }[];
+        organizations?: { slug: string; name?: string; personal?: boolean }[];
       };
-      return (info.organizations ?? []).map((org) => ({ slug: org.slug, name: org.name ?? org.slug }));
+      return (info.organizations ?? []).map((org) => ({
+        slug: org.slug,
+        name: org.name ?? org.slug,
+        personal: org.personal === true,
+      }));
+    },
+
+    /** Saves one memory with Lobu's save_memory tool; returns the saved event. */
+    async saveMemory(context: string | null, workspace: string, memory: SaveMemoryInput): Promise<SavedMemory> {
+      const saved = (await request(context, `/api/${encodeURIComponent(workspace)}/save_memory`, memory)) as {
+        id?: number;
+        view_url?: string;
+        error?: string | { message?: string };
+      };
+      if (typeof saved.id !== "number") {
+        const error = typeof saved.error === "string" ? saved.error : saved.error?.message;
+        throw new Error(error ?? "save_memory returned no event");
+      }
+      return { id: saved.id, viewUrl: saved.view_url ?? null };
     },
 
     /** Runs a read-only script in one workspace and returns its value. */

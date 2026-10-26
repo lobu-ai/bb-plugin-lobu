@@ -1,7 +1,7 @@
 {
   "name": "bb-plugin-lobu",
-  "version": "0.1.2",
-  "description": "Lobu in bb: approvals waiting on you, failed Automation and feed runs, unhealthy connections and devices, 24-hour activity, and pinned metrics across your Lobu workspaces.",
+  "version": "0.2.0",
+  "description": "Lobu in bb: approvals waiting on you, failed Automation and feed runs, unhealthy connections and devices, 24-hour activity, and pinned metrics across your Lobu workspaces, plus Save to Lobu for keeping what agents learn in Lobu memory.",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -18,7 +18,7 @@
   },
   "bb": {
     "name": "Lobu",
-    "description": "See what needs you across your Lobu workspaces: pending approvals, failed runs, unhealthy connections and devices, recent activity, and pinned metrics.",
+    "description": "See what needs you across your Lobu workspaces, and save what your agents learn to Lobu memory after reviewing it.",
     "branding": {
       "icon": "./icons/lobu.svg",
       "logo": {
