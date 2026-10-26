@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1
 
 - Tighter proposal bar: agents propose up to three memories and only when a
   different agent next month would act differently; "nothing to keep" is the
