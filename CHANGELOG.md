@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Fix git and marketplace installs: the page no longer imports the plugin
+  SDK's server package, which those installs leave out.
+
 ## 0.2.0
 
 - Save to Lobu: keep what agents learn in Lobu workspace memory. Agents

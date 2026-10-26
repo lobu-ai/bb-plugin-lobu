@@ -3,18 +3,15 @@
 // memories in a thread form and saves the ones the user keeps.
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { type MetricPin, metricPinsSchema, rpcContract, type Snapshot } from "./lib/contract";
+import { createLobuApi } from "./lib/lobu-api";
 import {
   type MemoryDraft,
   memoryDraftSchema,
-  type MetricPin,
-  metricPinsSchema,
   REMEMBER_RENDERER,
   type RememberForm,
   rememberSubmissionSchema,
-  rpcContract,
-  type Snapshot,
-} from "./lib/contract";
-import { createLobuApi } from "./lib/lobu-api";
+} from "./lib/memory-contract";
 import { describeOutcome, draftFromText, outcomeForAgent, pickWorkspace, type SaveOutcome, saveMemories } from "./lib/memory";
 import { buildSnapshot, discoverWorkspaces, parseList } from "./lib/snapshot";
 

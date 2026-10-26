@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { rememberSubmissionSchema } from "../lib/contract";
+import { rememberSubmissionSchema } from "../lib/memory-contract";
 import type { LobuApi, SaveMemoryInput } from "../lib/lobu-api";
 import {
   describeOutcome,

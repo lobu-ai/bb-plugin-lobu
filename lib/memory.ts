@@ -1,7 +1,7 @@
 // Save to Lobu: turns reviewed drafts into Lobu memories with save_memory,
 // through the same CLI login the dashboard reads with.
 import { createHash } from "node:crypto";
-import type { MemoryDraft, RememberSubmission } from "./contract";
+import type { MemoryDraft, RememberSubmission } from "./memory-contract";
 import type { LobuApi } from "./lobu-api";
 import type { WorkspaceOwner } from "./snapshot";
 

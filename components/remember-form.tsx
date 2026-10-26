@@ -8,7 +8,7 @@ import {
   type RememberForm,
   rememberFormSchema,
   type RememberSubmission,
-} from "@/lib/contract";
+} from "@/lib/memory-contract";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 

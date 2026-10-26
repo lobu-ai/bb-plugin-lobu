@@ -8,7 +8,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import { DashboardPage, NeedsYouStrip } from "@/components/dashboard";
 import { RememberFormView } from "@/components/remember-form";
-import { learnResultSchema, REMEMBER_RENDERER, rememberResultSchema } from "@/lib/contract";
+import { learnResultSchema, REMEMBER_RENDERER, rememberResultSchema } from "@/lib/memory-contract";
 
 const PLUGIN_ID = "lobu";
 

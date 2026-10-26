@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-lobu",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Lobu in bb: approvals waiting on you, failed Automation and feed runs, unhealthy connections and devices, 24-hour activity, and pinned metrics across your Lobu workspaces, plus Save to Lobu for keeping what agents learn in Lobu memory.",
   "type": "module",
   "license": "Apache-2.0",
