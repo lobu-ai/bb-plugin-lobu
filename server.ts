@@ -35,7 +35,7 @@ const REVIEW_TIMEOUT_MS = 24 * 60 * 60_000;
 const RECAP_TIMEOUT_MS = 10 * 60_000;
 
 const LEARN_PROMPT =
-  "Look back over this thread and call lobu_remember with the learnings worth keeping across sessions: decisions, non-obvious facts or gotchas, and preferences I stated. Keep each one short and self-contained. Skip anything temporary, obvious from the code, or sensitive. If nothing is worth keeping, say so instead of calling the tool.";
+  "Look back over this thread and call lobu_remember with the learnings worth keeping across sessions: decisions, non-obvious facts or gotchas, and preferences I stated as standing rules. Most threads contain nothing worth keeping; if so, say so instead of calling the tool. Never propose what this thread built or changed, anything the repo or code already states, generic quality wishes, or task requirements restated as preferences. At most three short, self-contained memories. Skip anything temporary, obvious from the code, already saved to Lobu, or sensitive.";
 
 function parsePins(value: string): MetricPin[] | null {
   try {
@@ -307,12 +307,12 @@ export default async function plugin(bb: BbPluginApi) {
     description:
       "Propose memories to save to the user's Lobu workspace memory. The user reviews, edits, and picks the workspace in a form before anything is saved.",
     instructions:
-      "When a task leaves something worth keeping across sessions (a decision, a non-obvious fact or gotcha, a preference the user stated), call lobu_remember once at the end with at most five short, self-contained memories. Never include secrets, credentials, or temporary state. Use lobu_remember rather than other memory-saving tools, because it shows the user a review form.",
+      "When a task leaves something worth keeping across sessions, call lobu_remember once at the end with at most three short, self-contained memories. Propose one only if a different agent, on a different task next month, would act differently because of it: a decision, a non-obvious fact or gotcha, or a preference the user stated as a standing rule. Most tasks contain nothing worth keeping; then do not call the tool. Never propose what the task built or changed, anything the repo or code already states, generic quality wishes, task requirements, or one-off values. Never include secrets, credentials, or temporary state. Use lobu_remember rather than other memory-saving tools, because it shows the user a review form.",
     presentation: {
       label: { pending: "Proposing memories for Lobu", completed: "Proposed memories for Lobu" },
       icon: { glyph: "lobu/lobu" },
     },
-    parameters: z.object({ memories: z.array(memoryDraftSchema).min(1).max(10) }),
+    parameters: z.object({ memories: z.array(memoryDraftSchema).min(1).max(3) }),
     async execute({ memories }, { threadId, signal }) {
       try {
         const source = await recapSource(threadId);

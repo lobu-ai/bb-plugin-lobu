@@ -13,7 +13,7 @@ export const memoryDraftSchema = z.object({
 });
 export type MemoryDraft = z.infer<typeof memoryDraftSchema>;
 
-/** What the review form shows. */
+/** What the review form shows. Drafts stay capped at ten so recaps queued by older tool versions still parse. */
 export const rememberFormSchema = z.object({
   drafts: z.array(memoryDraftSchema).min(1).max(10),
   workspaces: z.array(z.object({ slug: z.string(), name: z.string() })),
@@ -21,7 +21,7 @@ export const rememberFormSchema = z.object({
 });
 export type RememberForm = z.infer<typeof rememberFormSchema>;
 
-/** What the review form submits: only the memories the user kept, as edited. */
+/** What the review form submits: only the memories the user kept, as edited. The cap stays above the tool's so a kept subset always validates. */
 export const rememberSubmissionSchema = z.object({
   workspace: z.string().min(1),
   memories: z.array(memoryDraftSchema).max(10),

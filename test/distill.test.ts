@@ -56,6 +56,12 @@ describe("recapPrompt", () => {
     expect(prompt).toContain("<<<CONVERSATION\nUser: hi\nCONVERSATION>>>");
     expect(prompt).toContain("lobu_remember");
   });
+
+  test("expects nothing to keep and caps proposals at three", () => {
+    const prompt = recapPrompt("Anything", "User: hi");
+    expect(prompt).toContain('"Nothing to keep."');
+    expect(prompt).toContain("at most three");
+  });
 });
 
 describe("pending recaps", () => {
