@@ -55,6 +55,13 @@ There are three ways to get there:
 - **Ask for a recap.** Choose **Save learnings to Lobu** from the thread's ⋯
   menu. The agent looks back over the thread and proposes what is worth
   keeping.
+- **Recap on archive.** Turn on **Recap archived threads** in the settings.
+  When you archive a thread, a hidden agent reads it and proposes memories.
+  Nobody is looking at an archived thread, so the proposals wait in a
+  **Memories to review** card at the top of the Lobu page, in the same form,
+  until you save or skip them. Unreviewed recaps are dropped after a week.
+  Each recap is one agent turn; set **Recap provider** and **Recap model** to
+  a small, cheap model.
 
 The workspace defaults to the last one you saved to, or your personal
 workspace the first time. Saving the same memory twice from one thread stores it once.
@@ -90,7 +97,9 @@ inside Lobu, so only the rows the page shows come back. Results are cached for
 a minute and the page refreshes every two minutes.
 
 The only write is Save to Lobu, which calls Lobu's own `save_memory` for each
-memory you approve in the form. Tokens stay in the bb server process; the page
+memory you approve in the form. Recaps read the archived thread through bb's
+own thread API and keep their proposals in the plugin's bb storage until you
+review them. Tokens stay in the bb server process; the page
 only receives summaries and the form's contents.
 
 ## Settings
@@ -104,9 +113,16 @@ Open them in bb under Settings → Plugins → Lobu, or use `bb plugin config lo
 | `metrics` | `[]` | JSON array of metric queries, for example `[{"workspace":"acme","entity_type":"company","measure":"spend","by":["month"],"label":"Spend by month"}]`. |
 | `baseUrl` | `https://app.lobu.ai` | Change only for a self-hosted Lobu. |
 | `lobuBin` | empty | Path to the `lobu` CLI. Empty tries `~/.bun/bin/lobu`, then `lobu` on `PATH`. |
+| `recapOnArchive` | `false` | Recap threads when you archive them. The proposals wait on the Lobu page for review. |
+| `recapProvider` | empty | Provider id for recaps, such as `acp-opencode`. Empty uses the archived thread's provider. |
+| `recapModel` | empty | Model for recaps. Empty uses the provider's default. |
 
 ## Notes
 
+- The page shows the workspaces your CLI login covers, nothing more. If you
+  see fewer than you expect, your login was authorized for fewer: run `lobu
+  login` again and pick them all, or list a context that covers them in
+  `contexts` (`lobu context list` shows yours).
 - "Items synced" counts every item a feed run fetched, including ones it had
   already seen, so it measures sync volume rather than new data.
 - The 24-hour activity scan reads at most the newest 3,000 feed runs per

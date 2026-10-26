@@ -10,6 +10,8 @@ import type {
   Snapshot,
   WorkspaceSummary,
 } from "@/lib/contract";
+import type { PendingReview } from "@/lib/memory-contract";
+import { RememberFields } from "@/components/remember-form";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
@@ -280,6 +282,69 @@ function SetupCard({ setup }: { setup: NonNullable<Snapshot["setup"]> }) {
   );
 }
 
+/** Recaps of archived threads, each in the same review form a thread shows. */
+function PendingReviews() {
+  const rpc = useRpc<typeof rpcContract>();
+  const [reviews, setReviews] = useState<PendingReview[]>([]);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(() => {
+    rpc.call("pendingReviews", {}).then(setReviews, (cause: unknown) =>
+      setError(cause instanceof Error ? cause.message : String(cause)),
+    );
+  }, [rpc]);
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, POLL_MS);
+    return () => clearInterval(timer);
+  }, [load]);
+  if (reviews.length === 0 && saved === null && error === null) return null;
+  const done = (id: string) => setReviews((current) => current.filter((review) => review.id !== id));
+  return (
+    <section className="rounded-lg border border-border bg-card">
+      <header className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-sm font-medium">
+        <Icon name="lobu/lobu" className="size-4 text-muted-foreground" />
+        Memories to review
+        <span className="ml-auto text-xs text-muted-foreground">{formatCount(reviews.length)}</span>
+      </header>
+      <div className="divide-y divide-border px-4">
+        {saved === null ? null : <p className="py-2 text-sm text-muted-foreground">{saved}</p>}
+        {error === null ? null : (
+          <p role="alert" className="py-2 text-sm text-destructive">
+            {error}
+          </p>
+        )}
+        {reviews.map((review) => (
+          <div key={review.id} className="space-y-2 py-3">
+            <p className="text-xs text-muted-foreground">
+              From the archived thread <span className="font-medium text-foreground">{review.sourceTitle}</span>
+              {" · "}
+              {relativeTime(new Date(review.createdAt).toISOString())}
+            </p>
+            <RememberFields
+              form={review.form}
+              onSave={async (submission) => {
+                try {
+                  const outcome = await rpc.call("savePendingReview", { id: review.id, submission });
+                  setSaved(outcome.title);
+                  setError(null);
+                  done(review.id);
+                } catch (cause) {
+                  setError(cause instanceof Error ? cause.message : String(cause));
+                }
+              }}
+              onSkip={async () => {
+                await rpc.call("dismissPendingReview", { id: review.id });
+                done(review.id);
+              }}
+            />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function DashboardPage() {
   const { snapshot, error, loading, refresh } = useSnapshot();
   const ask = useAskAgent();
@@ -308,6 +373,7 @@ export function DashboardPage() {
           </p>
         )}
         {snapshot?.setup ? <SetupCard setup={snapshot.setup} /> : null}
+        <PendingReviews />
         {problems.length === 0 ? null : (
           <ul className="space-y-1 rounded-lg border border-destructive/40 px-4 py-3 text-xs text-destructive">
             {problems.map((problem) => (

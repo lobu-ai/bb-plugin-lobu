@@ -1,7 +1,9 @@
 // bb-plugin-lobu — server entry. Reads Lobu through the user's `lobu` CLI login
 // and serves one cached snapshot to the page over RPC. Save to Lobu reviews
-// memories in a thread form and saves the ones the user keeps.
-import type { BbPluginApi } from "@get-bb/plugin-sdk";
+// memories in a thread form and saves the ones the user keeps; recaps of
+// archived threads wait on the Lobu page for the same review.
+import { randomUUID } from "node:crypto";
+import type { BbPluginApi, PluginThreadEventPayloads } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { type MetricPin, metricPinsSchema, rpcContract, type Snapshot } from "./lib/contract";
 import { createLobuApi } from "./lib/lobu-api";
@@ -13,11 +15,24 @@ import {
   rememberSubmissionSchema,
 } from "./lib/memory-contract";
 import { describeOutcome, draftFromText, outcomeForAgent, pickWorkspace, type SaveOutcome, saveMemories } from "./lib/memory";
-import { buildSnapshot, discoverWorkspaces, parseList } from "./lib/snapshot";
+import { buildSnapshot, discoverWorkspaces, parseList, type WorkspaceOwner } from "./lib/snapshot";
+import {
+  addPending,
+  livePending,
+  type PendingRecap,
+  RECAP_SOURCE_KEY,
+  RECAP_TITLE_KEY,
+  recapPrompt,
+  TRANSCRIPT_EVENT_TYPES,
+  transcriptFromEvents,
+  worthRecapping,
+} from "./lib/distill";
 
 const CACHE_MS = 60_000;
 /** How long a review form waits before it closes itself. */
 const REVIEW_TIMEOUT_MS = 24 * 60 * 60_000;
+/** How long a recap thread may take before it is stopped. */
+const RECAP_TIMEOUT_MS = 10 * 60_000;
 
 const LEARN_PROMPT =
   "Look back over this thread and call lobu_remember with the learnings worth keeping across sessions: decisions, non-obvious facts or gotchas, and preferences I stated. Keep each one short and self-contained. Skip anything temporary, obvious from the code, or sensitive. If nothing is worth keeping, say so instead of calling the tool.";
@@ -78,6 +93,25 @@ export default async function plugin(bb: BbPluginApi) {
       description: "Leave empty to use ~/.bun/bin/lobu, then `lobu` on PATH.",
       default: "",
     },
+    recapOnArchive: {
+      type: "boolean",
+      label: "Recap archived threads",
+      description:
+        "When you archive a thread, a hidden agent reads it and proposes memories worth keeping. They wait on the Lobu page until you review them; nothing is saved without you. Each recap is one agent turn.",
+      default: false,
+    },
+    recapProvider: {
+      type: "string",
+      label: "Recap provider",
+      description: "Provider id for recaps, such as acp-opencode. Leave empty to use the archived thread's provider.",
+      default: "",
+    },
+    recapModel: {
+      type: "string",
+      label: "Recap model",
+      description: "Model for recaps. Leave empty for the provider's default. A small, cheap model is enough.",
+      default: "",
+    },
   });
 
   async function apiOptions() {
@@ -121,16 +155,12 @@ export default async function plugin(bb: BbPluginApi) {
    * Shows the review form in the thread and saves what the user keeps.
    * Resolves to null when the user skips. Nothing is saved without a submit.
    */
-  async function review(
-    threadId: string,
-    drafts: MemoryDraft[],
-    signal?: AbortSignal,
-  ): Promise<SaveOutcome | null> {
+  /** The review form for these drafts, with the workspaces the user can save to. */
+  async function formFor(drafts: MemoryDraft[]): Promise<{ owners: Map<string, WorkspaceOwner>; form: RememberForm }> {
     const { contexts, hiddenWorkspaces } = await settings.get();
     const named = parseList(contexts);
-    const hidden = new Set(parseList(hiddenWorkspaces));
     const { owners, setup } = await discoverWorkspaces(api, named.length === 0 ? [null] : named);
-    for (const slug of hidden) owners.delete(slug);
+    for (const slug of parseList(hiddenWorkspaces)) owners.delete(slug);
     if (owners.size === 0) throw new Error(setup?.message ?? "No Lobu workspace is available. Open the Lobu page for setup steps.");
     const preferred = (await bb.storage.kv.get<string>(PREFERRED_WORKSPACE)) ?? null;
     const form: RememberForm = {
@@ -138,6 +168,25 @@ export default async function plugin(bb: BbPluginApi) {
       workspaces: [...owners].map(([slug, owner]) => ({ slug, name: owner.name })),
       workspace: pickWorkspace(owners, preferred),
     };
+    return { owners, form };
+  }
+
+  /** Saves a submitted review and remembers the workspace for next time. */
+  async function save(owners: Map<string, WorkspaceOwner>, threadId: string, value: unknown): Promise<SaveOutcome> {
+    const submission = rememberSubmissionSchema.parse(value);
+    const owner = owners.get(submission.workspace);
+    if (owner === undefined) throw new Error(`Unknown workspace ${submission.workspace}`);
+    const outcome = await saveMemories(api, owner, (await apiOptions()).baseUrl, threadId, submission);
+    await bb.storage.kv.set(PREFERRED_WORKSPACE, submission.workspace);
+    return outcome;
+  }
+
+  async function review(
+    threadId: string,
+    drafts: MemoryDraft[],
+    signal?: AbortSignal,
+  ): Promise<SaveOutcome | null> {
+    const { owners, form } = await formFor(drafts);
     let outcome: SaveOutcome | null = null;
     const result = await bb.ui.requestInput(
       {
@@ -152,11 +201,7 @@ export default async function plugin(bb: BbPluginApi) {
         },
         // Saving here lets the row name exactly what was saved.
         async describeSubmission(value) {
-          const submission = rememberSubmissionSchema.parse(value);
-          const owner = owners.get(submission.workspace);
-          if (owner === undefined) throw new Error(`Unknown workspace ${submission.workspace}`);
-          outcome = await saveMemories(api, owner, (await apiOptions()).baseUrl, threadId, submission);
-          await bb.storage.kv.set(PREFERRED_WORKSPACE, submission.workspace);
+          outcome = await save(owners, threadId, value);
           return describeOutcome(outcome);
         },
       },
@@ -166,6 +211,100 @@ export default async function plugin(bb: BbPluginApi) {
     if (outcome === null) throw new Error("The memories were not saved.");
     return outcome;
   }
+
+  // Recaps of archived threads wait here until the user reviews them on the Lobu page.
+  const PENDING = "pendingRecaps";
+  let pendingLock: Promise<unknown> = Promise.resolve();
+  /** Serializes read-modify-write of the pending list. */
+  function updatePending<T>(change: (list: PendingRecap[]) => { list: PendingRecap[]; result: T }): Promise<T> {
+    const run = pendingLock.then(async () => {
+      const { list, result } = change(livePending(await bb.storage.kv.get(PENDING), Date.now()));
+      await bb.storage.kv.set(PENDING, list);
+      return result;
+    });
+    pendingLock = run.catch(() => undefined);
+    return run;
+  }
+
+  /** The archived thread a hidden recap thread is reading, or null for an ordinary thread. */
+  async function recapSource(threadId: string): Promise<{ threadId: string; title: string } | null> {
+    const metadata = await bb.sdk.threads.getPluginMetadata({ threadId, pluginId: bb.pluginId });
+    const source = metadata[RECAP_SOURCE_KEY];
+    const title = metadata[RECAP_TITLE_KEY];
+    if (typeof source !== "string") return null;
+    return { threadId: source, title: typeof title === "string" ? title : "Archived thread" };
+  }
+
+  /** The user turns and agent messages of a thread, newest pages first since the recap keeps the end. */
+  async function readTranscript(threadId: string) {
+    const pages: unknown[][] = [];
+    let beforeSeq: string | undefined;
+    // bb serves at most 100 events a page; 20 pages covers what the transcript keeps.
+    for (let page = 0; page < 20; page += 1) {
+      const batch = await bb.sdk.threads.events.list({
+        threadId,
+        types: [...TRANSCRIPT_EVENT_TYPES],
+        order: "desc",
+        limit: "100",
+        ...(beforeSeq === undefined ? {} : { beforeSeq }),
+      });
+      pages.push([...batch].reverse());
+      const oldest = batch.at(-1);
+      if (batch.length < 100 || oldest === undefined) break;
+      beforeSeq = String(oldest.seq);
+    }
+    return transcriptFromEvents(pages.reverse().flat());
+  }
+
+  async function recapArchived(thread: PluginThreadEventPayloads["thread.archived"]["thread"]) {
+    const { recapOnArchive, recapProvider, recapModel } = await settings.get();
+    if (!recapOnArchive || thread.visibility !== "visible" || thread.originPluginId === bb.pluginId) return;
+    const transcript = await readTranscript(thread.id);
+    if (!worthRecapping(transcript)) {
+      bb.log.info(`Lobu recap of ${thread.id} skipped: no conversation to recap`);
+      return;
+    }
+    const title = thread.title ?? thread.titleFallback ?? "Untitled thread";
+    const provider = recapProvider.trim();
+    const model = recapModel.trim();
+    const worker = await bb.sdk.threads.spawn({
+      projectId: thread.projectId,
+      environment: { type: "project-default" },
+      providerId: provider === "" ? thread.providerId : provider,
+      ...(model === "" ? {} : { model }),
+      visibility: "hidden",
+      title: `Lobu recap: ${title}`,
+      pluginMetadata: { [RECAP_SOURCE_KEY]: thread.id, [RECAP_TITLE_KEY]: title },
+      prompt: recapPrompt(title, transcript.text),
+    });
+    await finishRecap(worker.id);
+  }
+
+  /** Lets a recap thread finish its turn, then archives it and releases its runtime. */
+  async function finishRecap(threadId: string) {
+    try {
+      await bb.sdk.threads.wait({ threadId, status: "idle", timeoutMs: RECAP_TIMEOUT_MS });
+    } finally {
+      await bb.sdk.threads.archive({ threadId });
+      await bb.sdk.threads.stop({ threadId });
+    }
+  }
+
+  bb.events.on("thread.archived", ({ thread }) => {
+    recapArchived(thread).catch((cause: unknown) => bb.log.warn(`Lobu recap of ${thread.id} failed: ${String(cause)}`));
+  });
+
+  // A reload while a recap runs drops its wait, so finish any recap threads left behind.
+  void bb.sdk.threads
+    .list({ originPluginId: bb.pluginId, includeHidden: true, archived: false })
+    .then((leftover) =>
+      Promise.all(
+        leftover.map((thread) =>
+          finishRecap(thread.id).catch((cause: unknown) => bb.log.warn(`Lobu recap cleanup of ${thread.id} failed: ${String(cause)}`)),
+        ),
+      ),
+    )
+    .catch((cause: unknown) => bb.log.warn(`Lobu recap cleanup failed: ${String(cause)}`));
 
   bb.agents.registerTool({
     name: "lobu_remember",
@@ -180,6 +319,12 @@ export default async function plugin(bb: BbPluginApi) {
     parameters: z.object({ memories: z.array(memoryDraftSchema).min(1).max(10) }),
     async execute({ memories }, { threadId, signal }) {
       try {
+        const source = await recapSource(threadId);
+        if (source !== null) {
+          const recap = { id: randomUUID(), sourceThreadId: source.threadId, sourceTitle: source.title, createdAt: Date.now(), drafts: memories };
+          await updatePending((list) => ({ list: addPending(list, recap), result: null }));
+          return `Queued ${memories.length} for the user to review on the Lobu page. Nothing is saved until they do.`;
+        }
         return outcomeForAgent(await review(threadId, memories, signal));
       } catch (cause) {
         return { content: [{ type: "text", text: cause instanceof Error ? cause.message : String(cause) }], isError: true };
@@ -206,5 +351,28 @@ export default async function plugin(bb: BbPluginApi) {
       await bb.sdk.threads.send({ threadId, mode: "queue-if-active", input: [{ type: "text", text: LEARN_PROMPT, mentions: [] }] });
       return { sent: true };
     },
+    pendingReviews: async () => {
+      const recaps = livePending(await bb.storage.kv.get(PENDING), Date.now());
+      if (recaps.length === 0) return [];
+      return Promise.all(
+        recaps.map(async (recap) => ({
+          id: recap.id,
+          sourceTitle: recap.sourceTitle,
+          createdAt: recap.createdAt,
+          form: (await formFor(recap.drafts)).form,
+        })),
+      );
+    },
+    savePendingReview: async ({ id, submission }) => {
+      const recap = livePending(await bb.storage.kv.get(PENDING), Date.now()).find((r) => r.id === id);
+      if (recap === undefined) throw new Error("This recap is no longer waiting for review.");
+      const { owners } = await formFor(recap.drafts);
+      // Keyed to the archived thread, so saving the same memory again stores it once.
+      const outcome = await save(owners, recap.sourceThreadId, submission);
+      await updatePending((list) => ({ list: list.filter((r) => r.id !== id), result: null }));
+      return describeOutcome(outcome);
+    },
+    dismissPendingReview: ({ id }) =>
+      updatePending((list) => ({ list: list.filter((r) => r.id !== id), result: { dismissed: list.some((r) => r.id === id) } })),
   });
 }

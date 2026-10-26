@@ -10,7 +10,8 @@ See what needs you across your Lobu workspaces without leaving bb.
 - A one-line summary on the New thread screen when something needs you.
 - **Save to Lobu**: agents propose what they learned, or you save any message,
   and a review form lets you edit and choose before anything reaches Lobu
-  memory.
+  memory. Optionally, archived threads are recapped and their proposals wait
+  on the Lobu page for review.
 
 ## How it works
 

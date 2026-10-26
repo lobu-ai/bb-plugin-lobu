@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Recap on archive: with **Recap archived threads** on, archiving a thread
+  starts a hidden agent that proposes memories from it. They wait in a new
+  **Memories to review** card on the Lobu page until you save or skip them.
+  **Recap provider** and **Recap model** pick a cheaper agent for the job.
+
 ## 0.2.1
 
 - Fix git and marketplace installs: the page no longer imports the plugin

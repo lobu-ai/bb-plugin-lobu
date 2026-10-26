@@ -1,7 +1,13 @@
 // The RPC contract between server.ts and the page. app.tsx imports types only.
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { learnResultSchema, rememberResultSchema } from "./memory-contract";
+import {
+  learnResultSchema,
+  pendingReviewSchema,
+  rememberResultSchema,
+  rememberSubmissionSchema,
+  savedSummarySchema,
+} from "./memory-contract";
 
 const itemSchema = z.object({
   title: z.string(),
@@ -87,5 +93,20 @@ export const rpcContract = defineRpcContract({
   learn: {
     input: z.object({ threadId: z.string() }),
     output: learnResultSchema,
+  },
+  /** Recaps of archived threads waiting for review, oldest first. */
+  pendingReviews: {
+    input: z.object({}),
+    output: z.array(pendingReviewSchema),
+  },
+  /** Saves the memories the user kept from one recap, then drops the recap. */
+  savePendingReview: {
+    input: z.object({ id: z.string(), submission: rememberSubmissionSchema }),
+    output: savedSummarySchema,
+  },
+  /** Drops a recap without saving anything. */
+  dismissPendingReview: {
+    input: z.object({ id: z.string() }),
+    output: z.object({ dismissed: z.boolean() }),
   },
 });

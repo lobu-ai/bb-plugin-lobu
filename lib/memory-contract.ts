@@ -31,5 +31,17 @@ export type RememberSubmission = z.infer<typeof rememberSubmissionSchema>;
 /** The form's renderer id, shared by requestInput and the pendingInteraction slot. */
 export const REMEMBER_RENDERER = "remember";
 
-export const rememberResultSchema = z.object({ opened: z.boolean(), error: z.string().nullable() });
+/** A recap of an archived thread, waiting on the Lobu page for review. */
+export const pendingReviewSchema = z.object({
+  id: z.string(),
+  sourceTitle: z.string(),
+  createdAt: z.number(),
+  form: rememberFormSchema,
+});
+export type PendingReview = z.infer<typeof pendingReviewSchema>;
+
+/** What saving a reviewed recap did, in the same words the thread row uses. */
+export const savedSummarySchema = z.object({ title: z.string(), detail: z.string() });
+
+export const rememberResultSchema =z.object({ opened: z.boolean(), error: z.string().nullable() });
 export const learnResultSchema = z.object({ sent: z.boolean() });

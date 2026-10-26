@@ -19,14 +19,10 @@ interface Row extends MemoryDraft {
   keep: boolean;
 }
 
+/** The review form in a thread, in place of the composer. */
 export function RememberFormView({ interaction, submit, cancel }: PluginPendingInteractionProps) {
   const parsed = rememberFormSchema.safeParse(interaction.payload);
-  const form: RememberForm | null = parsed.success ? parsed.data : null;
-  const [rows, setRows] = useState<Row[]>(() => (form?.drafts ?? []).map((draft) => ({ ...draft, keep: true })));
-  const [workspace, setWorkspace] = useState(form?.workspace ?? form?.workspaces[0]?.slug ?? "");
-  const [busy, setBusy] = useState(false);
-
-  if (form === null) {
+  if (!parsed.success) {
     return (
       <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm">
         <span className="text-destructive">This Save to Lobu request is malformed.</span>
@@ -36,6 +32,22 @@ export function RememberFormView({ interaction, submit, cancel }: PluginPendingI
       </div>
     );
   }
+  return <RememberFields form={parsed.data} onSave={submit} onSkip={cancel} />;
+}
+
+/** Proposed memories to untick, edit, and save; shared by the thread form and the Lobu page. */
+export function RememberFields({
+  form,
+  onSave,
+  onSkip,
+}: {
+  form: RememberForm;
+  onSave: (value: RememberSubmission) => Promise<unknown>;
+  onSkip: () => Promise<unknown> | void;
+}) {
+  const [rows, setRows] = useState<Row[]>(() => form.drafts.map((draft) => ({ ...draft, keep: true })));
+  const [workspace, setWorkspace] = useState(form.workspace ?? form.workspaces[0]?.slug ?? "");
+  const [busy, setBusy] = useState(false);
 
   const update = (index: number, patch: Partial<Row>) =>
     setRows((current) => current.map((row, i) => (i === index ? { ...row, ...patch } : row)));
@@ -51,14 +63,13 @@ export function RememberFormView({ interaction, submit, cancel }: PluginPendingI
       })),
     };
     try {
-      await submit(value);
+      await onSave(value);
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    // bb draws the card and its "Save to Lobu" title around this form.
     <section aria-label="Save to Lobu" className="max-h-[60vh] space-y-3 overflow-y-auto text-sm">
       <header className="flex items-center gap-2">
         <span className="text-muted-foreground">Keep what is worth remembering, edit anything, then save.</span>
@@ -129,7 +140,7 @@ export function RememberFormView({ interaction, submit, cancel }: PluginPendingI
       </ul>
       <footer className="flex items-center justify-end gap-2">
         <span className="mr-auto text-xs text-muted-foreground">Nothing is saved until you choose Save.</span>
-        <Button size="sm" variant="ghost" onClick={() => void cancel()} disabled={busy}>
+        <Button size="sm" variant="ghost" onClick={() => void onSkip()} disabled={busy}>
           Skip
         </Button>
         <Button size="sm" onClick={() => void save()} disabled={busy || kept.length === 0 || workspace === ""}>
