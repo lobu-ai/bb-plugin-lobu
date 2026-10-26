@@ -138,7 +138,13 @@ export async function discoverWorkspaces(api: LobuApi, contexts: (string | null)
       if (!owners.has(slug)) owners.set(slug, { context, name, personal });
     }
   });
-  return { owners, setup: setup as Snapshot["setup"], errors };
+  // Setup steps only when nothing is reachable; one expired login among working ones is a problem line.
+  const found = setup as Snapshot["setup"];
+  if (found !== null && owners.size > 0) {
+    errors.push(`${found.context ?? "active context"}: ${found.message}`);
+    return { owners, setup: null, errors };
+  }
+  return { owners, setup: found, errors };
 }
 
 export async function buildSnapshot(api: LobuApi, config: SnapshotConfig): Promise<Snapshot> {

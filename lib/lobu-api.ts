@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { z } from "zod";
 import type { SetupCode } from "./contract";
 
 const execFileAsync = promisify(execFile);
@@ -54,6 +55,29 @@ export function resolveLobuBin(configured: string): string {
   if (configured !== "") return configured;
   const bunBin = join(homedir(), ".bun", "bin", "lobu");
   return existsSync(bunBin) ? bunBin : "lobu";
+}
+
+const cliContextsSchema = z.object({
+  contexts: z.array(z.object({ name: z.string(), url: z.string(), current: z.boolean(), loggedIn: z.boolean() })),
+});
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** Contexts with a login on this Lobu, the active one first, from `lobu context list --json`. */
+export function contextsForLobu(listed: unknown, baseUrl: string): string[] {
+  const parsed = cliContextsSchema.safeParse(listed);
+  if (!parsed.success) return [];
+  const origin = originOf(baseUrl);
+  return parsed.data.contexts
+    .filter((context) => context.loggedIn && origin !== null && originOf(context.url) === origin)
+    .sort((a, b) => Number(b.current) - Number(a.current))
+    .map((context) => context.name);
 }
 
 export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
@@ -118,6 +142,22 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
   }
 
   return {
+    /**
+     * Every CLI login on this Lobu, so each workspace the user authorized
+     * appears without configuration. Null when the CLI cannot list them
+     * (missing, or older than `context list --json`); callers then use the
+     * active context.
+     */
+    async contexts(): Promise<string[] | null> {
+      try {
+        const { stdout } = await execFileAsync(resolveLobuBin(lobuBin), ["context", "list", "--json"], { timeout: 20_000 });
+        const names = contextsForLobu(JSON.parse(stdout), baseUrl);
+        return names.length === 0 ? null : names;
+      } catch {
+        return null;
+      }
+    },
+
     /** Workspaces the login for this CLI context is authorized for. */
     async workspaces(context: string | null): Promise<Workspace[]> {
       const info = (await request(context, "/oauth/userinfo")) as {

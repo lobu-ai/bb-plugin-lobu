@@ -8,7 +8,9 @@ memory, without leaving bb.
 
 ## What you get
 
-A **Lobu** page in the bb sidebar with five cards, grouped by workspace:
+A **Lobu** page in the bb sidebar covering every workspace your `lobu` CLI
+logins can reach. A row of workspace chips at the top narrows the page to one
+workspace (the choice is remembered), and the cards are grouped by workspace:
 
 - **Needs you**: pending approvals and Automations that are due. Identical
   requests collapse into one row ("36 approvals waiting") that links to all of
@@ -90,8 +92,9 @@ bb plugin install git:https://github.com/lobu-ai/bb-plugin-lobu.git
 
 ## How it talks to Lobu
 
-The plugin reuses your `lobu` CLI login. For each configured CLI context it
-runs `lobu token --raw`, asks Lobu which workspaces that login covers, and
+The plugin reuses your `lobu` CLI logins. It runs `lobu context list --json`
+and keeps every context that is logged in to the configured Lobu URL. For each
+one it runs `lobu token --raw`, asks Lobu which workspaces that login covers, and
 makes one read-only `query_sdk` call per workspace. The summary is computed
 inside Lobu, so only the rows the page shows come back. Results are cached for
 a minute and the page refreshes every two minutes.
@@ -108,7 +111,6 @@ Open them in bb under Settings → Plugins → Lobu, or use `bb plugin config lo
 
 | Setting | Default | Description |
 |---|---|---|
-| `contexts` | empty | Comma-separated `lobu` CLI contexts. Empty uses the CLI's active context. A login only covers the workspaces you authorized; add another with `lobu context add <name> --url https://app.lobu.ai/api/v1` and `lobu login --context <name>`, then list it here. |
 | `hiddenWorkspaces` | empty | Comma-separated workspace slugs to leave out. |
 | `metrics` | `[]` | JSON array of metric queries, for example `[{"workspace":"acme","entity_type":"company","measure":"spend","by":["month"],"label":"Spend by month"}]`. |
 | `baseUrl` | `https://app.lobu.ai` | Change only for a self-hosted Lobu. |
@@ -119,10 +121,13 @@ Open them in bb under Settings → Plugins → Lobu, or use `bb plugin config lo
 
 ## Notes
 
-- The page shows the workspaces your CLI login covers, nothing more. If you
-  see fewer than you expect, your login was authorized for fewer: run `lobu
-  login` again and pick them all, or list a context that covers them in
-  `contexts` (`lobu context list` shows yours).
+- The page shows the workspaces your CLI logins cover, nothing more. Each
+  login only covers the workspaces you approved when you ran `lobu login`. If
+  one is missing, run `lobu login` again and approve it, or log in another
+  context with `lobu context add <name> --url https://app.lobu.ai/api/v1` and
+  `lobu login --context <name>`; it shows up on the next refresh.
+- Reading every login needs a Lobu CLI with `lobu context list --json`. An
+  older CLI shows only its active context's workspaces.
 - "Items synced" counts every item a feed run fetched, including ones it had
   already seen, so it measures sync volume rather than new data.
 - The 24-hour activity scan reads at most the newest 3,000 feed runs per

@@ -54,13 +54,6 @@ function trimTrailingSlashes(url: string): string {
 
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
-    contexts: {
-      type: "string",
-      label: "Lobu CLI contexts",
-      description:
-        "Comma-separated `lobu` CLI contexts to read. Leave empty for the CLI's active context. Every workspace a login is authorized for appears. Add one with `lobu context add <name> --url https://app.lobu.ai/api/v1`, then `lobu login --context <name>`.",
-      default: "",
-    },
     hiddenWorkspaces: {
       type: "string",
       label: "Hidden workspaces",
@@ -123,13 +116,17 @@ export default async function plugin(bb: BbPluginApi) {
   let cached: { at: number; snapshot: Snapshot } | null = null;
   let inFlight: Promise<Snapshot> | null = null;
 
+  /** Every CLI login on this Lobu, or the CLI's active context when it cannot list them. */
+  async function loginContexts(): Promise<(string | null)[]> {
+    return (await api.contexts()) ?? [null];
+  }
+
   async function snapshot(refresh: boolean): Promise<Snapshot> {
     if (!refresh && cached !== null && Date.now() - cached.at < CACHE_MS) return cached.snapshot;
     inFlight ??= (async () => {
-      const { contexts, hiddenWorkspaces, metrics } = await settings.get();
-      const named = parseList(contexts);
+      const { hiddenWorkspaces, metrics } = await settings.get();
       return buildSnapshot(api, {
-        contexts: named.length === 0 ? [null] : named,
+        contexts: await loginContexts(),
         hiddenWorkspaces: new Set(parseList(hiddenWorkspaces)),
         baseUrl: (await apiOptions()).baseUrl,
         pins: parsePins(metrics) ?? [],
@@ -151,15 +148,10 @@ export default async function plugin(bb: BbPluginApi) {
   /** The workspace the user last saved memories to. */
   const PREFERRED_WORKSPACE = "memoryWorkspace";
 
-  /**
-   * Shows the review form in the thread and saves what the user keeps.
-   * Resolves to null when the user skips. Nothing is saved without a submit.
-   */
   /** The review form for these drafts, with the workspaces the user can save to. */
   async function formFor(drafts: MemoryDraft[]): Promise<{ owners: Map<string, WorkspaceOwner>; form: RememberForm }> {
-    const { contexts, hiddenWorkspaces } = await settings.get();
-    const named = parseList(contexts);
-    const { owners, setup } = await discoverWorkspaces(api, named.length === 0 ? [null] : named);
+    const { hiddenWorkspaces } = await settings.get();
+    const { owners, setup } = await discoverWorkspaces(api, await loginContexts());
     for (const slug of parseList(hiddenWorkspaces)) owners.delete(slug);
     if (owners.size === 0) throw new Error(setup?.message ?? "No Lobu workspace is available. Open the Lobu page for setup steps.");
     const preferred = (await bb.storage.kv.get<string>(PREFERRED_WORKSPACE)) ?? null;
@@ -181,6 +173,10 @@ export default async function plugin(bb: BbPluginApi) {
     return outcome;
   }
 
+  /**
+   * Shows the review form in the thread and saves what the user keeps.
+   * Resolves to null when the user skips. Nothing is saved without a submit.
+   */
   async function review(
     threadId: string,
     drafts: MemoryDraft[],
@@ -323,7 +319,8 @@ export default async function plugin(bb: BbPluginApi) {
         if (source !== null) {
           const recap = { id: randomUUID(), sourceThreadId: source.threadId, sourceTitle: source.title, createdAt: Date.now(), drafts: memories };
           await updatePending((list) => ({ list: addPending(list, recap), result: null }));
-          return `Queued ${memories.length} for the user to review on the Lobu page. Nothing is saved until they do.`;
+          const count = `${memories.length} ${memories.length === 1 ? "memory" : "memories"}`;
+          return `Nothing was saved. ${count} now wait for the user to review on the Lobu page. Reply with exactly: "Queued ${count} for review on the Lobu page."`;
         }
         return outcomeForAgent(await review(threadId, memories, signal));
       } catch (cause) {

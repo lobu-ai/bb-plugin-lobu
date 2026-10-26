@@ -273,9 +273,8 @@ function SetupCard({ setup }: { setup: NonNullable<Snapshot["setup"]> }) {
         </p>
       ) : (
         <p>
-          Check the plugin's "Lobu CLI contexts" and "Hidden workspaces" settings, or log in to another workspace
-          with <Command>lobu context add &lt;name&gt; --url https://app.lobu.ai/api/v1</Command> and{" "}
-          <Command>lobu login --context &lt;name&gt;</Command>, then add that context.
+          Check the plugin's "Hidden workspaces" setting, or run <Command>lobu login</Command> again and approve the
+          workspaces you want. Every CLI login on this Lobu appears here.
         </p>
       )}
     </section>
@@ -345,13 +344,74 @@ function PendingReviews() {
   );
 }
 
+const FILTER_KEY = "lobu.dashboard.workspace";
+
+function readFilter(): string | null {
+  try {
+    return localStorage.getItem(FILTER_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** The workspace the page is narrowed to, remembered across visits; null shows all. */
+function useWorkspaceFilter(all: WorkspaceSummary[]) {
+  const [selected, setSelected] = useState<string | null>(readFilter);
+  const choose = (slug: string | null) => {
+    setSelected(slug);
+    try {
+      if (slug === null) localStorage.removeItem(FILTER_KEY);
+      else localStorage.setItem(FILTER_KEY, slug);
+    } catch {
+      // Storage can be unavailable; the choice then lasts for this visit.
+    }
+  };
+  const active = selected !== null && all.some((w) => w.slug === selected) ? selected : null;
+  return { active, choose, shown: active === null ? all : all.filter((w) => w.slug === active) };
+}
+
+function WorkspaceChips({
+  workspaces,
+  active,
+  onChoose,
+}: {
+  workspaces: WorkspaceSummary[];
+  active: string | null;
+  onChoose: (slug: string | null) => void;
+}) {
+  const chip = (slug: string | null, label: string, waiting: number) => (
+    <button
+      key={slug ?? "__all"}
+      type="button"
+      aria-pressed={active === slug}
+      onClick={() => onChoose(slug)}
+      className={cn(
+        "flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors",
+        active === slug
+          ? "border-foreground/30 bg-accent text-foreground"
+          : "border-border text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+      )}
+    >
+      {label}
+      {waiting > 0 ? <span className="rounded-full bg-destructive/10 px-1.5 text-destructive">{formatCount(waiting)}</span> : null}
+    </button>
+  );
+  return (
+    <nav aria-label="Workspaces" className="flex flex-wrap gap-1.5">
+      {chip(null, "All", total(workspaces, (w) => countOf(w.needsYou)))}
+      {workspaces.map((w) => chip(w.slug, w.name === w.slug ? w.slug : w.name, countOf(w.needsYou)))}
+    </nav>
+  );
+}
+
 export function DashboardPage() {
   const { snapshot, error, loading, refresh } = useSnapshot();
   const ask = useAskAgent();
-  const workspaces = snapshot?.workspaces ?? [];
+  const all = snapshot?.workspaces ?? [];
+  const { active, choose, shown: workspaces } = useWorkspaceFilter(all);
   const problems = [
     ...(snapshot?.errors ?? []),
-    ...workspaces.filter((w) => w.error !== null).map((w) => `${w.slug}: ${w.error}`),
+    ...all.filter((w) => w.error !== null).map((w) => `${w.slug}: ${w.error}`),
   ];
   const devices = snapshot?.devices ?? [];
   return (
@@ -359,7 +419,7 @@ export function DashboardPage() {
       <div className="mx-auto box-border w-full max-w-3xl space-y-4 px-4 pb-6 pt-3 md:px-5 md:pt-4">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span>
-            {workspaces.length} workspace{workspaces.length === 1 ? "" : "s"}
+            {all.length} workspace{all.length === 1 ? "" : "s"}
             {snapshot === null ? null : ` · updated ${relativeTime(snapshot.fetchedAt)}`}
           </span>
           <Button variant="ghost" size="sm" className="ml-auto" onClick={refresh} disabled={loading}>
@@ -373,6 +433,7 @@ export function DashboardPage() {
           </p>
         )}
         {snapshot?.setup ? <SetupCard setup={snapshot.setup} /> : null}
+        {all.length > 1 ? <WorkspaceChips workspaces={all} active={active} onChoose={choose} /> : null}
         <PendingReviews />
         {problems.length === 0 ? null : (
           <ul className="space-y-1 rounded-lg border border-destructive/40 px-4 py-3 text-xs text-destructive">

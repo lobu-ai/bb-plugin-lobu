@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+- Every `lobu` CLI login on your Lobu is read, so all the workspaces you
+  approved appear without configuration. The `contexts` setting is gone.
+  Needs a CLI with `lobu context list --json`; older CLIs show the active
+  context only.
+- Workspace chips at the top of the Lobu page narrow it to one workspace and
+  remember the choice.
+- Recap threads now say their memories are queued for review, not saved.
+
 ## 0.3.0
 
 - Recap on archive: with **Recap archived threads** on, archiving a thread

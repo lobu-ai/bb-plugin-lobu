@@ -118,6 +118,19 @@ describe("buildSnapshot", () => {
     expect(snapshot.workspaces).toEqual([]);
   });
 
+  test("lists an expired login as a problem when other logins work", async () => {
+    const { api } = fakeApi({
+      workspaces: async (context) => {
+        if (context === "stale") throw new LobuSetupError("not_logged_in", context, "Lobu rejected the login for stale.");
+        return [{ slug: "acme", name: "Acme" }];
+      },
+    });
+    const snapshot = await buildSnapshot(api, config({ contexts: ["work", "stale"] }));
+    expect(snapshot.setup).toBeNull();
+    expect(snapshot.errors).toEqual(["stale: Lobu rejected the login for stale."]);
+    expect(snapshot.workspaces.map((w) => w.slug)).toEqual(["acme"]);
+  });
+
   test("reports no visible workspaces as a setup problem", async () => {
     const { api } = fakeApi({ workspaces: async () => [{ slug: "acme", name: "Acme" }] });
     const snapshot = await buildSnapshot(api, config({ hiddenWorkspaces: new Set(["acme"]) }));
