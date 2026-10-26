@@ -42,15 +42,17 @@ can find them later with `search_memory`.
 Nothing is saved until you review it. A form takes the place of the message
 box: untick what you don't want, edit the wording, pick the kind (fact,
 decision, preference, observation, or note) and the workspace, then choose
-**Save**. **Skip** saves nothing. Afterwards the thread shows what was saved,
+**Save**. Each proposal carries the evidence quote it came from, shown under
+the text. **Skip** saves nothing. Afterwards the thread shows what was saved,
 with links to each memory in Lobu.
 
 There are three ways to get there:
 
 - **The agent offers.** Agents get a `lobu_remember` tool and are asked to use
-  it when a task leaves something worth keeping, proposing a few short
+  it when a task leaves something worth keeping, proposing up to three short
   memories at the end of the task. For example, after fixing a flaky deploy it might propose
-  "Staging deploys need the office VPN".
+  "Staging deploys need the office VPN". Most tasks contain nothing worth
+  keeping, and then the agent proposes nothing.
 - **Save a message.** Hover any message and choose **Save to Lobu**, or
   highlight part of an answer and pick **Save to Lobu** from the selection
   menu. The form opens with that text, so "remember this" is two clicks.
@@ -59,14 +61,16 @@ There are three ways to get there:
   keeping.
 - **Recap on archive.** Turn on **Recap archived threads** in the settings.
   When you archive a thread, a hidden agent reads it and proposes memories.
-  Nobody is looking at an archived thread, so the proposals wait in a
+  Threads need a real back-and-forth to qualify, and ones ending in diffs or
+  status dumps are skipped. Nobody is looking at an archived thread, so the proposals wait in a
   **Memories to review** card at the top of the Lobu page, in the same form,
   until you save or skip them. Unreviewed recaps are dropped after a week.
   Each recap is one agent turn; set **Recap provider** and **Recap model** to
   a small, cheap model.
 
 The workspace defaults to the last one you saved to, or your personal
-workspace the first time. Saving the same memory twice from one thread stores it once.
+workspace the first time. When the drafts agree on a workspace, that one is
+preselected instead, and the form says so. Saving the same memory twice from one thread stores it once.
 It works with any agent bb runs. Agents that cannot wait on a tool call, such
 as opencode, end their turn while the form is open and receive the result as
 a follow-up message once you save or skip.

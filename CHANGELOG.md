@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Tighter proposal bar: agents propose up to three memories and only when a
+  different agent next month would act differently; "nothing to keep" is the
+  expected answer. Each proposal carries an evidence quote shown in the
+  review form, and proposals without one fail validation.
+- Drafts can name their Lobu workspace; a unanimous hint preselects it in
+  the form, and disagreement is flagged before saving.
+- Archive recaps need a real back-and-forth (three user turns) and skip
+  threads ending in diffs or status dumps; long transcripts keep the opening
+  as well as the ending. Queued recaps show the archived thread's opening
+  message, and the review card gains a dismiss-all button.
+
 ## 0.4.0
 
 - Every `lobu` CLI login on your Lobu is read, so all the workspaces you

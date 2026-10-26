@@ -9,12 +9,12 @@ import { type MetricPin, metricPinsSchema, rpcContract, type Snapshot } from "./
 import { createLobuApi } from "./lib/lobu-api";
 import {
   type MemoryDraft,
-  memoryDraftSchema,
+  memoryProposalSchema,
   REMEMBER_RENDERER,
   type RememberForm,
   rememberSubmissionSchema,
 } from "./lib/memory-contract";
-import { describeOutcome, draftFromText, outcomeForAgent, pickWorkspace, type SaveOutcome, saveMemories } from "./lib/memory";
+import { describeOutcome, draftFromText, outcomeForAgent, pickWorkspaceWithHints, type SaveOutcome, saveMemories } from "./lib/memory";
 import { buildSnapshot, discoverWorkspaces, parseList, type WorkspaceOwner } from "./lib/snapshot";
 import {
   addPending,
@@ -35,7 +35,7 @@ const REVIEW_TIMEOUT_MS = 24 * 60 * 60_000;
 const RECAP_TIMEOUT_MS = 10 * 60_000;
 
 const LEARN_PROMPT =
-  "Look back over this thread and call lobu_remember with the learnings worth keeping across sessions: decisions, non-obvious facts or gotchas, and preferences I stated as standing rules. Most threads contain nothing worth keeping; if so, say so instead of calling the tool. Never propose what this thread built or changed, anything the repo or code already states, generic quality wishes, or task requirements restated as preferences. At most three short, self-contained memories. Skip anything temporary, obvious from the code, already saved to Lobu, or sensitive.";
+  "Look back over this thread and call lobu_remember with the learnings worth keeping across sessions: decisions, non-obvious facts or gotchas, and preferences I stated as standing rules. Most threads contain nothing worth keeping; if so, say so instead of calling the tool. Never propose what this thread built or changed, anything the repo or code already states, generic quality wishes, or task requirements restated as preferences. At most three short, self-contained memories, each with a short evidence quote of the turn or finding it came from. Skip anything temporary, obvious from the code, already saved to Lobu, or sensitive.";
 
 function parsePins(value: string): MetricPin[] | null {
   try {
@@ -155,10 +155,16 @@ export default async function plugin(bb: BbPluginApi) {
     for (const slug of parseList(hiddenWorkspaces)) owners.delete(slug);
     if (owners.size === 0) throw new Error(setup?.message ?? "No Lobu workspace is available. Open the Lobu page for setup steps.");
     const preferred = (await bb.storage.kv.get<string>(PREFERRED_WORKSPACE)) ?? null;
+    const picked = pickWorkspaceWithHints(
+      owners,
+      preferred,
+      drafts.map((draft) => draft.workspace ?? null),
+    );
     const form: RememberForm = {
       drafts,
       workspaces: [...owners].map(([slug, owner]) => ({ slug, name: owner.name })),
-      workspace: pickWorkspace(owners, preferred),
+      workspace: picked.workspace,
+      workspaceNote: picked.note,
     };
     return { owners, form };
   }
@@ -276,6 +282,25 @@ export default async function plugin(bb: BbPluginApi) {
     await finishRecap(worker.id);
   }
 
+  /** The archived thread's opening user message, for recap triage; null when unreadable. */
+  async function readFirstUserMessage(threadId: string): Promise<string | null> {
+    try {
+      const batch = await bb.sdk.threads.events.list({
+        threadId,
+        types: [...TRANSCRIPT_EVENT_TYPES],
+        order: "asc",
+        limit: "100",
+      });
+      const transcript = transcriptFromEvents([...batch]);
+      const first = transcript.text.split("\n").find((line) => line.startsWith("User: "));
+      if (first === undefined) return null;
+      const text = first.slice("User: ".length).trim();
+      return text === "" ? null : text.slice(0, 200);
+    } catch {
+      return null;
+    }
+  }
+
   /** Lets a recap thread finish its turn, then archives it and releases its runtime. */
   async function finishRecap(threadId: string) {
     try {
@@ -307,17 +332,24 @@ export default async function plugin(bb: BbPluginApi) {
     description:
       "Propose memories to save to the user's Lobu workspace memory. The user reviews, edits, and picks the workspace in a form before anything is saved.",
     instructions:
-      "When a task leaves something worth keeping across sessions, call lobu_remember once at the end with at most three short, self-contained memories. Propose one only if a different agent, on a different task next month, would act differently because of it: a decision, a non-obvious fact or gotcha, or a preference the user stated as a standing rule. Most tasks contain nothing worth keeping; then do not call the tool. Never propose what the task built or changed, anything the repo or code already states, generic quality wishes, task requirements, or one-off values. Never include secrets, credentials, or temporary state. Use lobu_remember rather than other memory-saving tools, because it shows the user a review form.",
+      "When a task leaves something worth keeping across sessions, call lobu_remember once at the end with at most three short, self-contained memories. Propose one only if a different agent, on a different task next month, would act differently because of it: a decision, a non-obvious fact or gotcha, or a preference the user stated as a standing rule. Most tasks contain nothing worth keeping; then do not call the tool. Never propose what the task built or changed, anything the repo or code already states, generic quality wishes, task requirements, or one-off values. Each memory needs a short evidence quote of the turn or finding it came from. Never include secrets, credentials, or temporary state. Use lobu_remember rather than other memory-saving tools, because it shows the user a review form.",
     presentation: {
       label: { pending: "Proposing memories for Lobu", completed: "Proposed memories for Lobu" },
       icon: { glyph: "lobu/lobu" },
     },
-    parameters: z.object({ memories: z.array(memoryDraftSchema).min(1).max(3) }),
+    parameters: z.object({ memories: z.array(memoryProposalSchema).min(1).max(3) }),
     async execute({ memories }, { threadId, signal }) {
       try {
         const source = await recapSource(threadId);
         if (source !== null) {
-          const recap = { id: randomUUID(), sourceThreadId: source.threadId, sourceTitle: source.title, createdAt: Date.now(), drafts: memories };
+          const recap = {
+            id: randomUUID(),
+            sourceThreadId: source.threadId,
+            sourceTitle: source.title,
+            createdAt: Date.now(),
+            firstMessage: await readFirstUserMessage(source.threadId),
+            drafts: memories,
+          };
           await updatePending((list) => ({ list: addPending(list, recap), result: null }));
           const count = `${memories.length} ${memories.length === 1 ? "memory" : "memories"}`;
           return `Nothing was saved. ${count} now wait for the user to review on the Lobu page. Reply with exactly: "Queued ${count} for review on the Lobu page."`;
@@ -356,6 +388,7 @@ export default async function plugin(bb: BbPluginApi) {
           id: recap.id,
           sourceTitle: recap.sourceTitle,
           createdAt: recap.createdAt,
+          firstMessage: recap.firstMessage ?? null,
           form: (await formFor(recap.drafts)).form,
         })),
       );

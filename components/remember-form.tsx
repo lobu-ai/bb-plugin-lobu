@@ -88,6 +88,9 @@ export function RememberFields({
           </select>
         </label>
       </header>
+      {form.workspaceNote === null ? null : (
+        <p className="text-xs text-muted-foreground">{form.workspaceNote}</p>
+      )}
       <ul className="space-y-2">
         {rows.map((row, index) => (
           <li
@@ -134,6 +137,14 @@ export function RememberFields({
                 disabled={!row.keep}
                 onChange={(event) => update(index, { content: event.target.value })}
               />
+              {row.evidence === null || row.evidence === undefined || row.evidence === "" ? null : (
+                <p className="text-xs text-muted-foreground">
+                  Evidence: <span className="italic">{row.evidence}</span>
+                </p>
+              )}
+              {row.workspace === null || row.workspace === undefined || row.workspace === "" ? null : (
+                <p className="text-xs text-muted-foreground">Suggested workspace: {row.workspace}</p>
+              )}
             </div>
           </li>
         ))}
