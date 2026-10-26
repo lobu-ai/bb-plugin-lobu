@@ -35,7 +35,7 @@ Agents in bb forget everything when a thread ends. Save to Lobu keeps the
 useful parts in your Lobu workspace memory, where any agent connected to Lobu
 can find them later with `search_memory`.
 
-![Reviewing proposed memories before they are saved](docs/screenshots/save-to-lobu.jpg)
+![The agent proposed two memories after being asked to remember them; the user reviews them before saving](docs/screenshots/save-to-lobu.jpg)
 
 Nothing is saved until you review it. A form takes the place of the message
 box: untick what you don't want, edit the wording, pick the kind (fact,
@@ -58,6 +58,9 @@ There are three ways to get there:
 
 The workspace defaults to the last one you saved to, or your personal
 workspace the first time. Saving the same memory twice from one thread stores it once.
+It works with any agent bb runs. Agents that cannot wait on a tool call, such
+as opencode, end their turn while the form is open and receive the result as
+a follow-up message once you save or skip.
 Agents pick up the `lobu_remember` tool when their session starts, so threads
 that were already open before you installed the plugin need a new thread
 first.
