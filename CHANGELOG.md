@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- Fix git installs: match the plugin SDK's `@types/better-sqlite3` peer range.
+
 ## 0.1.0
 
 - Lobu page with Needs you, Failed runs, Connections & devices, Activity, and
