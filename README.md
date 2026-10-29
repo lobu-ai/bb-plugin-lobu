@@ -96,7 +96,9 @@ bb plugin install git:https://github.com/lobu-ai/bb-plugin-lobu.git
 
 ## How it talks to Lobu
 
-The plugin reuses your `lobu` CLI logins. It runs `lobu context list --json`
+The plugin reuses your `lobu` CLI logins. bb opened from the Dock does not
+see your shell's `PATH`, so the plugin reads `PATH` once from your login shell
+and runs the CLI with it, the same way your terminal does. It runs `lobu context list --json`
 and keeps every context that is logged in to the configured Lobu URL. For each
 one it runs `lobu token --raw`, asks Lobu which workspaces that login covers, and
 makes one read-only `query_sdk` call per workspace. The summary is computed
@@ -118,7 +120,7 @@ Open them in bb under Settings → Plugins → Lobu, or use `bb plugin config lo
 | `hiddenWorkspaces` | empty | Comma-separated workspace slugs to leave out. |
 | `metrics` | `[]` | JSON array of metric queries, for example `[{"workspace":"acme","entity_type":"company","measure":"spend","by":["month"],"label":"Spend by month"}]`. |
 | `baseUrl` | `https://app.lobu.ai` | Change only for a self-hosted Lobu. |
-| `lobuBin` | empty | Path to the `lobu` CLI. Empty tries `~/.bun/bin/lobu`, then `lobu` on `PATH`. |
+| `lobuBin` | empty | Path to the `lobu` CLI. Empty tries `~/.bun/bin/lobu`, then `lobu` on your login shell's `PATH`. |
 | `recapOnArchive` | `false` | Recap threads when you archive them. The proposals wait on the Lobu page for review. |
 | `recapProvider` | empty | Provider id for recaps, such as `acp-opencode`. Empty uses the archived thread's provider. |
 | `recapModel` | empty | Model for recaps. Empty uses the provider's default. |

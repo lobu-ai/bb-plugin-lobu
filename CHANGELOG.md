@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- The plugin runs the `lobu` CLI with your login shell's `PATH`. bb opened
+  from the Dock only sees launchd's minimal `PATH`, so a CLI that needs a
+  Homebrew, nvm, or Bun `node` failed to start and the Lobu page wrongly
+  asked you to log in.
+- A CLI that cannot run now gets its own setup step showing the CLI's error,
+  instead of being reported as a missing login.
+
 ## 0.4.1
 
 - Tighter proposal bar: agents propose up to three memories and only when a

@@ -260,6 +260,11 @@ function SetupCard({ setup }: { setup: NonNullable<Snapshot["setup"]> }) {
           Install the CLI with <Command>npm install -g @lobu/cli</Command>, then run <Command>lobu login</Command>.
           If it lives somewhere unusual, set its path in this plugin's settings.
         </p>
+      ) : setup.code === "cli_failed" ? (
+        <p>
+          The CLI runs with the PATH your login shell sets up, so it needs <Command>node</Command> there. Check that{" "}
+          <Command>lobu whoami</Command> works in a terminal, or set the CLI's full path in this plugin's settings.
+        </p>
       ) : setup.code === "not_logged_in" ? (
         <p>
           {setup.context === null ? null : (

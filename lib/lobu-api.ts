@@ -1,29 +1,11 @@
 // Talks to Lobu with the user's existing `lobu` CLI login. Tokens stay in the
 // plugin server process and are never sent to the page.
-import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { promisify } from "node:util";
 import { z } from "zod";
-import type { SetupCode } from "./contract";
-
-const execFileAsync = promisify(execFile);
+import { cliFailure, createCliRunner, LobuSetupError } from "./cli";
 
 /** How long a minted token is reused before asking the CLI again. */
 const TOKEN_TTL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
-
-/** Lobu cannot be reached at all; the page turns this into setup steps. */
-export class LobuSetupError extends Error {
-  constructor(
-    readonly code: SetupCode,
-    readonly context: string | null,
-    message: string,
-  ) {
-    super(message);
-  }
-}
 
 export interface Workspace {
   slug: string;
@@ -50,13 +32,6 @@ export interface LobuApiOptions {
   lobuBin: string;
 }
 
-/** The CLI binary: the configured path, else Bun's global bin, else PATH. */
-export function resolveLobuBin(configured: string): string {
-  if (configured !== "") return configured;
-  const bunBin = join(homedir(), ".bun", "bin", "lobu");
-  return existsSync(bunBin) ? bunBin : "lobu";
-}
-
 const cliContextsSchema = z.object({
   contexts: z.array(z.object({ name: z.string(), url: z.string(), current: z.boolean(), loggedIn: z.boolean() })),
 });
@@ -81,6 +56,7 @@ export function contextsForLobu(listed: unknown, baseUrl: string): string[] {
 }
 
 export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
+  const runLobu = createCliRunner(lobuBin);
   const tokens = new Map<string, { value: string; mintedAt: number }>();
   const contextLabel = (context: string | null) => context ?? "the active context";
 
@@ -91,16 +67,9 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
     const args = ["token", "--raw", ...(context === null ? [] : ["--context", context])];
     let stdout: string;
     try {
-      ({ stdout } = await execFileAsync(resolveLobuBin(lobuBin), args, { timeout: 20_000 }));
+      stdout = await runLobu(args);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new LobuSetupError("cli_missing", context, "The lobu CLI is not installed.");
-      }
-      throw new LobuSetupError(
-        "not_logged_in",
-        context,
-        `The lobu CLI has no login for ${contextLabel(context)}.`,
-      );
+      throw cliFailure(error, context);
     }
     const value = stdout.trim().split("\n").pop()?.trim() ?? "";
     if (value.length < 20) {
@@ -150,8 +119,7 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
      */
     async contexts(): Promise<string[] | null> {
       try {
-        const { stdout } = await execFileAsync(resolveLobuBin(lobuBin), ["context", "list", "--json"], { timeout: 20_000 });
-        const names = contextsForLobu(JSON.parse(stdout), baseUrl);
+        const names = contextsForLobu(JSON.parse(await runLobu(["context", "list", "--json"])), baseUrl);
         return names.length === 0 ? null : names;
       } catch {
         return null;

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { LobuSetupError, type LobuApi } from "../lib/lobu-api";
+import { LobuSetupError } from "../lib/cli";
+import type { LobuApi } from "../lib/lobu-api";
 import { buildSnapshot, deviceItems, parseList, workspaceUrl, type SnapshotConfig } from "../lib/snapshot";
 import type { RawWorkspaceSummary } from "../lib/workspace-summary";
 

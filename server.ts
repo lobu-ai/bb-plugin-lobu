@@ -83,7 +83,7 @@ export default async function plugin(bb: BbPluginApi) {
     lobuBin: {
       type: "string",
       label: "lobu CLI path",
-      description: "Leave empty to use ~/.bun/bin/lobu, then `lobu` on PATH.",
+      description: "Leave empty to use ~/.bun/bin/lobu, then `lobu` on your login shell's PATH.",
       default: "",
     },
     recapOnArchive: {
