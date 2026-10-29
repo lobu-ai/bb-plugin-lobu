@@ -6,14 +6,6 @@ import type { SavedRecord } from "./memory-contract";
 /** At most this many saved memories go into the embedded app's link. */
 const MAX_SHOWN = 100;
 
-export function parseList(value: string): string[] {
-  return value
-    .replaceAll(",", " ")
-    .split(" ")
-    .map((part) => part.trim())
-    .filter((part) => part !== "");
-}
-
 export interface WorkspaceOwner {
   context: string | null;
   name: string;

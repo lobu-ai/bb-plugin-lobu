@@ -18,7 +18,7 @@ const WHOAMI = JSON.stringify({
 const MINIMAL_PATH = "/usr/bin:/bin";
 
 let root: string;
-const saved = { PATH: process.env.PATH, SHELL: process.env.SHELL };
+const saved = { PATH: process.env.PATH, SHELL: process.env.SHELL, HOME: process.env.HOME };
 
 function script(path: string, body: string) {
   writeFileSync(path, body);
@@ -31,18 +31,23 @@ beforeAll(() => {
   const shellOnly = join(root, "shell-only");
   mkdirSync(shellOnly);
   script(join(shellOnly, "fake-node"), `#!/bin/sh\nprintf '%s\\n' '${WHOAMI}'\n`);
-  script(join(root, "lobu"), "#!/usr/bin/env fake-node\n");
-  script(join(root, "lobu-broken"), "#!/usr/bin/env missing-interpreter\n");
-  // A login shell whose rc files print noise and add a directory to PATH.
-  script(
-    join(root, "login-shell"),
-    `#!/bin/sh\necho "rc file noise"\nPATH="${shellOnly}:${MINIMAL_PATH}"\nexport PATH\nshift\nexec /bin/sh -c "$1"\n`,
-  );
+  script(join(shellOnly, "lobu"), "#!/usr/bin/env fake-node\n");
+  const brokenOnly = join(root, "broken-only");
+  mkdirSync(brokenOnly);
+  script(join(brokenOnly, "lobu"), "#!/usr/bin/env missing-interpreter\n");
+  // Login shells whose rc files print noise and add a directory to PATH.
+  for (const [name, dir] of [
+    ["login-shell", shellOnly],
+    ["login-shell-broken", brokenOnly],
+  ] as const) {
+    script(join(root, name), `#!/bin/sh\necho "rc file noise"\nPATH="${dir}:${MINIMAL_PATH}"\nexport PATH\nshift\nexec /bin/sh -c "$1"\n`);
+  }
 });
 
 afterEach(() => {
   process.env.PATH = saved.PATH;
   process.env.SHELL = saved.SHELL;
+  process.env.HOME = saved.HOME;
 });
 
 afterAll(() => {
@@ -50,17 +55,20 @@ afterAll(() => {
 });
 
 describe("running the lobu CLI from a Dock-launched bb", () => {
-  test("finds the CLI's interpreter on the login shell's PATH", async () => {
+  // HOME has no ~/.bun/bin, so the CLI is found only through the login shell's PATH.
+  test("finds the CLI and its interpreter on the login shell's PATH", async () => {
     process.env.PATH = MINIMAL_PATH;
     process.env.SHELL = join(root, "login-shell");
-    const api = createLobuApi({ baseUrl: "https://lobu.example.com", lobuBin: join(root, "lobu") });
+    process.env.HOME = root;
+    const api = createLobuApi({ baseUrl: "https://lobu.example.com" });
     expect(await api.workspaces(null)).toEqual([{ slug: "acme", name: "Acme", personal: true }]);
   });
 
   test("reports a CLI that cannot start, not a missing login", async () => {
     process.env.PATH = MINIMAL_PATH;
-    process.env.SHELL = join(root, "login-shell");
-    const api = createLobuApi({ baseUrl: "https://lobu.example.com", lobuBin: join(root, "lobu-broken") });
+    process.env.SHELL = join(root, "login-shell-broken");
+    process.env.HOME = root;
+    const api = createLobuApi({ baseUrl: "https://lobu.example.com" });
     const failure = await api.workspaces(null).then(
       () => null,
       (error: unknown) => error as { code?: string; message?: string },

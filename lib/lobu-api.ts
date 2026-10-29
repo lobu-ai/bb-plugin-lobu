@@ -73,7 +73,6 @@ export function parseWhoami(output: string): Session | null {
 
 export interface LobuApiOptions {
   baseUrl: string;
-  lobuBin: string;
 }
 
 const cliContextsSchema = z.object({
@@ -119,8 +118,8 @@ export function lobuOrigin(url: string): string | null {
   }
 }
 
-export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
-  const cli = createCliRunner(lobuBin);
+export function createLobuApi({ baseUrl }: LobuApiOptions) {
+  const cli = createCliRunner();
   const runLobu = cli.run;
   const sessions = new Map<string, { session: Session; at: number }>();
   const contextLabel = (context: string | null) => context ?? "the active context";

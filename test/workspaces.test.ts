@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { LobuSetupError } from "../lib/cli";
 import type { LobuApi } from "../lib/lobu-api";
 import type { SavedRecord } from "../lib/memory-contract";
-import { discoverWorkspaces, parseList, savedEventsPath } from "../lib/workspaces";
+import { discoverWorkspaces, savedEventsPath } from "../lib/workspaces";
 
 const fakeApi = (workspaces: (context: string | null) => Promise<{ slug: string; name: string; personal?: boolean }[]>) =>
   ({ workspaces: async (context: string | null) => (await workspaces(context)).map((w) => ({ personal: false, ...w })) }) as unknown as LobuApi;
@@ -19,13 +19,6 @@ const record = (eventId: number, workspace: string, savedAt: number): SavedRecor
   savedAt,
   uses: 0,
   lastUsedAt: null,
-});
-
-describe("parseList", () => {
-  test("splits on commas and whitespace", () => {
-    expect(parseList(" acme, beta  gamma,,")).toEqual(["acme", "beta", "gamma"]);
-    expect(parseList("")).toEqual([]);
-  });
 });
 
 describe("discoverWorkspaces", () => {

@@ -21,6 +21,15 @@ export const CLI_MAJOR = 24;
 const CLI_PACKAGE = `@lobu/cli@^${CLI_MAJOR}`;
 const MARKER = "__BB_PLUGIN_LOBU_PATH__";
 
+/**
+ * The user's home directory: HOME first, as Node's os.homedir() does. Bun's
+ * homedir() ignores a HOME set after startup, which tests rely on to keep the
+ * plugin away from the real CLI.
+ */
+export function userHome(): string {
+  return process.env.HOME || homedir();
+}
+
 /** Where CLI installers put binaries, kept when the shell cannot be read. */
 function wellKnownDirs(home: string): string[] {
   return [join(home, ".bun", "bin"), "/opt/homebrew/bin", "/usr/local/bin"];
@@ -71,9 +80,8 @@ export function mergePath(shellPath: string | null, inheritedPath: string | unde
   return [...new Set(dirs.filter((dir) => dir !== ""))];
 }
 
-/** The CLI binary: the configured path, else Bun's global bin, else the first `lobu` on the merged PATH. */
-export function resolveLobuBin(configured: string, pathDirs: string[], home: string): string {
-  if (configured !== "") return configured;
+/** The CLI binary: Bun's global bin, else the first `lobu` on the merged PATH. */
+export function resolveLobuBin(pathDirs: string[], home: string): string {
   for (const dir of [join(home, ".bun", "bin"), ...pathDirs]) {
     const candidate = join(dir, "lobu");
     if (existsSync(candidate)) return candidate;
@@ -153,13 +161,13 @@ export function firstUrl(output: string): string | null {
 }
 
 /** Runs CLI commands with the login shell's PATH, read once per runner. */
-export function createCliRunner(lobuBin: string) {
-  const home = homedir();
+export function createCliRunner() {
+  const home = userHome();
   let prepared: Promise<{ bin: string; dirs: string[]; env: NodeJS.ProcessEnv }> | null = null;
   const prepare = () => {
     prepared ??= loginShellPath(process.env.SHELL).then((shellPath) => {
       const dirs = mergePath(shellPath, process.env.PATH, home);
-      return { bin: resolveLobuBin(lobuBin, dirs, home), dirs, env: { ...process.env, PATH: dirs.join(delimiter) } };
+      return { bin: resolveLobuBin(dirs, home), dirs, env: { ...process.env, PATH: dirs.join(delimiter) } };
     });
     return prepared;
   };

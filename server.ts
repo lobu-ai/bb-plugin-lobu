@@ -8,9 +8,8 @@
 import type { BbPluginApi, PluginThreadEventPayloads } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { rpcContract } from "./lib/contract";
-import { CLI_MAJOR, FALLBACK_INSTALL, LobuSetupError } from "./lib/cli";
+import { CLI_MAJOR, FALLBACK_INSTALL, LobuSetupError, userHome } from "./lib/cli";
 import type { ChildProcess } from "node:child_process";
-import { homedir } from "node:os";
 import { createLobuApi, lobuOrigin } from "./lib/lobu-api";
 import { hasProject, isServing, lastLogLine, LOCAL_CONTEXT, localFolders, localPort, startLocal } from "./lib/local";
 import {
@@ -50,7 +49,7 @@ import {
   SAVED_KEY,
   THREAD_LOGS_KEY,
 } from "./lib/memory-store";
-import { discoverWorkspaces, parseList, savedEventsPath, type WorkspaceOwner } from "./lib/workspaces";
+import { discoverWorkspaces, savedEventsPath, type WorkspaceOwner } from "./lib/workspaces";
 import {
   RECAP_SOURCE_KEY,
   RECAP_TITLE_KEY,
@@ -72,6 +71,8 @@ const DUPLICATE_SIMILARITY = 0.92;
 const DEFAULT_ORIGIN = "https://app.lobu.ai";
 /** The CLI's built-in context for Lobu Cloud. */
 const CLOUD_CONTEXT = "lobu";
+/** Plugin storage key for the CLI context bb uses. */
+const LOGIN_KEY = "login";
 const SETUP_HINT = "Connect Lobu from the card on bb's New thread screen, or under Settings → Plugins → Lobu.";
 
 const LEARN_PROMPT =
@@ -79,25 +80,6 @@ const LEARN_PROMPT =
 
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
-    hiddenWorkspaces: {
-      type: "string",
-      label: "Hidden workspaces",
-      description: "Comma-separated workspace slugs bb never saves to or searches.",
-      default: "",
-    },
-    login: {
-      type: "string",
-      label: "Lobu login",
-      description:
-        "The lobu CLI context bb saves and searches through: lobu for Lobu Cloud, local for Lobu on this machine. Leave empty to follow the CLI's active context. Pick one in the Lobu account section.",
-      default: "",
-    },
-    lobuBin: {
-      type: "string",
-      label: "lobu CLI path",
-      description: "Leave empty to use ~/.bun/bin/lobu, then `lobu` on your login shell's PATH.",
-      default: "",
-    },
     autoSave: {
       type: "boolean",
       label: "Save memories automatically",
@@ -109,55 +91,44 @@ export default async function plugin(bb: BbPluginApi) {
       type: "boolean",
       label: "Recap archived threads",
       description:
-        "When you archive a thread, a hidden agent reads it and saves what is worth remembering, like any other memory. Needs auto-save on, since nobody reviews an archived thread. Each recap is one agent turn.",
+        "When you archive a thread, a hidden agent with the thread's own provider reads it and saves what is worth remembering, like any other memory. Needs auto-save on, since nobody reviews an archived thread. Each recap is one agent turn.",
       default: false,
-    },
-    recapProvider: {
-      type: "string",
-      label: "Recap provider",
-      description: "Provider id for recaps, such as acp-opencode. Leave empty to use the archived thread's provider.",
-      default: "",
-    },
-    recapModel: {
-      type: "string",
-      label: "Recap model",
-      description: "Model for recaps. Leave empty for the provider's default. A small, cheap model is enough.",
-      default: "",
     },
   });
 
-  // The API talks to the origin of the login bb uses with the configured CLI;
-  // it is rebuilt as soon as either changes.
+  // The API talks to the origin of the login bb uses; it is rebuilt when that changes.
   let apiOrigin = DEFAULT_ORIGIN;
-  let apiBin = (await settings.get()).lobuBin.trim();
-  let api = createLobuApi({ baseUrl: apiOrigin, lobuBin: apiBin });
-  function useApi(origin: string, lobuBin: string) {
-    if (origin === apiOrigin && lobuBin === apiBin) return;
-    api = createLobuApi({ baseUrl: origin, lobuBin });
+  let api = createLobuApi({ baseUrl: apiOrigin });
+  function useApi(origin: string) {
+    if (origin === apiOrigin) return;
+    api = createLobuApi({ baseUrl: origin });
     apiOrigin = origin;
-    apiBin = lobuBin;
+  }
+
+  /** The CLI context bb uses, picked in the Lobu account section; empty follows the CLI's active context. */
+  async function chosenLogin(): Promise<string> {
+    return (await bb.storage.kv.get<string>(LOGIN_KEY)) ?? "";
+  }
+  async function useLogin(context: string): Promise<void> {
+    await bb.storage.kv.set(LOGIN_KEY, context);
+    reach = null;
   }
 
   /** The CLI context bb uses (null: the CLI's active one) and the Lobu origin it signs in to. */
   async function resolveLogin(): Promise<{ context: string | null; origin: string }> {
-    const chosen = (await settings.get()).login.trim();
+    const chosen = await chosenLogin();
     const listed = await api.cliContexts();
     const entry = listed?.find((c) => (chosen === "" ? c.current : c.name === chosen));
     const context = chosen === "" ? (entry?.name ?? null) : chosen;
     const origin = entry?.origin ?? (context === LOCAL_CONTEXT ? `http://localhost:${localPort(null)}` : DEFAULT_ORIGIN);
-    useApi(origin, apiBin);
+    useApi(origin);
     return { context, origin };
   }
-
-  settings.onChange((next) => {
-    useApi(apiOrigin, next.lobuBin.trim());
-    reach = null;
-  });
 
   // ---- Lobu on this machine. Like the Mac app, bb uses a local Lobu that is
   // already serving, starts its own otherwise, and stops what it started when
   // the plugin stops.
-  const folders = localFolders(homedir());
+  const folders = localFolders(userHome());
   let localChild: ChildProcess | null = null;
   let localFailure: string | null = null;
   async function localOrigin(): Promise<string> {
@@ -184,7 +155,7 @@ export default async function plugin(bb: BbPluginApi) {
     localChild?.kill("SIGTERM");
   });
   // Back on after a restart, the way the Mac app starts its Lobu at launch.
-  if ((await settings.get()).login.trim() === LOCAL_CONTEXT && hasProject(folders)) {
+  if ((await chosenLogin()) === LOCAL_CONTEXT && hasProject(folders)) {
     void ensureLocal().catch((cause: unknown) => bb.log.warn(`Lobu on this machine did not start: ${String(cause)}`));
   }
 
@@ -219,13 +190,11 @@ export default async function plugin(bb: BbPluginApi) {
     problem: string | null;
   }
   let reach: Reach | null = null;
-  /** The workspaces the login bb uses reaches, minus hidden ones; empty when Lobu is unreachable. */
+  /** The workspaces the login bb uses reaches; empty when Lobu is unreachable. */
   async function reachLobu(): Promise<Reach> {
     if (reach !== null && Date.now() - reach.at < OWNERS_MS) return reach;
     const { context, origin } = await resolveLogin();
-    const { hiddenWorkspaces } = await settings.get();
     const { owners, problem } = await discoverWorkspaces(api, [context]);
-    for (const slug of parseList(hiddenWorkspaces)) owners.delete(slug);
     const next = { at: Date.now(), origin, owners, problem };
     if (owners.size > 0) reach = next;
     return next;
@@ -503,7 +472,7 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   async function recapArchived(thread: PluginThreadEventPayloads["thread.archived"]["thread"]) {
-    const { recapOnArchive, autoSave: automatic, recapProvider, recapModel } = await settings.get();
+    const { recapOnArchive, autoSave: automatic } = await settings.get();
     if (!recapOnArchive || !automatic || thread.visibility !== "visible" || thread.originPluginId === bb.pluginId) return;
     const transcript = await readTranscript(thread.id);
     if (!worthRecapping(transcript)) {
@@ -511,13 +480,10 @@ export default async function plugin(bb: BbPluginApi) {
       return;
     }
     const title = thread.title ?? thread.titleFallback ?? "Untitled thread";
-    const provider = recapProvider.trim();
-    const model = recapModel.trim();
     const worker = await bb.sdk.threads.spawn({
       projectId: thread.projectId,
       environment: { type: "project-default" },
-      providerId: provider === "" ? thread.providerId : provider,
-      ...(model === "" ? {} : { model }),
+      providerId: thread.providerId,
       visibility: "hidden",
       title: `Lobu recap: ${title}`,
       pluginMetadata: { [RECAP_SOURCE_KEY]: thread.id, [RECAP_TITLE_KEY]: title },
@@ -640,24 +606,24 @@ export default async function plugin(bb: BbPluginApi) {
       const cli = await api.cliState();
       const installer = await api.installer();
       const starting = localChild !== null;
-      const base = { cli, installCommand: installer?.command ?? null, manualCommand: FALLBACK_INSTALL, logins: [], login: null, starting };
+      const base = { cli, installCommand: installer?.command ?? null, manualCommand: FALLBACK_INSTALL, login: null, starting };
       if (cli.state === "missing" || cli.state === "broken") return base;
-      const logins = (await api.cliContexts()) ?? [];
       const { context, origin } = await resolveLogin();
-      const signedOut = { context, origin, account: null, personal: null };
+      const kind = context === CLOUD_CONTEXT ? "cloud" : context === LOCAL_CONTEXT ? "local" : "other";
+      const signedOut = { context, kind, origin, account: null, personal: null } as const;
       // Asking the CLI about a local Lobu that is down would only sign in again later.
       if (context === LOCAL_CONTEXT && !(await isServing(origin))) {
         const problem = starting ? "Lobu on this machine is starting." : (localFailure ?? "Lobu on this machine is not running.");
-        return { ...base, logins, login: { ...signedOut, problem } };
+        return { ...base, login: { ...signedOut, problem } };
       }
       try {
         const { account, workspaces } = await api.identity(context);
         const personal = workspaces.find((w) => w.personal)?.slug ?? null;
         const problem = workspaces.length === 0 ? `bb could not list your workspaces on ${new URL(origin).host}.` : null;
-        return { ...base, logins, login: { context, origin, account, personal, problem } };
+        return { ...base, login: { ...signedOut, account, personal, problem } };
       } catch (cause) {
         const problem = cause instanceof Error ? cause.message : String(cause);
-        return { ...base, logins, login: { ...signedOut, problem } };
+        return { ...base, login: { ...signedOut, problem } };
       }
     },
     installCli: async () => {
@@ -674,8 +640,7 @@ export default async function plugin(bb: BbPluginApi) {
       return { error: `The install left lobu ${after.version}; bb needs ${CLI_MAJOR} or newer.` };
     },
     useCloud: async () => {
-      await settings.experimental_set({ login: CLOUD_CONTEXT });
-      reach = null;
+      await useLogin(CLOUD_CONTEXT);
       const signedIn = (await api.cliContexts())?.some((c) => c.name === CLOUD_CONTEXT && c.loggedIn) ?? false;
       return { approvalUrl: signedIn ? null : await api.signIn(CLOUD_CONTEXT) };
     },
@@ -685,24 +650,21 @@ export default async function plugin(bb: BbPluginApi) {
       } catch (cause) {
         return { error: cause instanceof Error ? cause.message : String(cause) };
       }
-      await settings.experimental_set({ login: LOCAL_CONTEXT });
-      reach = null;
+      await useLogin(LOCAL_CONTEXT);
       return { error: null };
     },
     addLogin: async ({ name, url }) => {
       const origin = lobuOrigin(url);
       if (origin === null) throw new Error("Use an HTTPS Lobu URL, or HTTP on this machine.");
-      return { approvalUrl: await api.addContext(name, origin) };
-    },
-    useLogin: async ({ context }) => {
-      await settings.experimental_set({ login: context ?? "" });
-      reach = null;
-      return { context };
+      const approvalUrl = await api.addContext(name, origin);
+      await useLogin(name);
+      return { approvalUrl };
     },
     savedLink: async () => {
       const { origin, owners } = await reachLobu();
       const path = savedEventsPath(memory.saved, new Set(owners.keys()));
-      return { url: path === null ? null : `${origin}${path}` };
+      const count = memory.saved.filter((record) => owners.has(record.workspace)).length;
+      return { url: path === null ? null : `${origin}${path}`, count };
     },
     remember: async ({ threadId, text }) => {
       // The form stays open until the user answers, so do not hold the RPC.

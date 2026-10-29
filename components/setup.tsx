@@ -156,18 +156,18 @@ function InstallStep({ status, reload }: { status: SetupStatus; reload: () => Pr
   );
 }
 
-/** Like the Lobu Mac app: sign in to Lobu Cloud, or run Lobu on this machine. */
-function ChooseStep({ status, reload }: { status: SetupStatus; reload: () => Promise<SetupStatus | null> }) {
+/**
+ * Switching the login bb uses, like the Lobu Mac app: Lobu Cloud, Lobu on this
+ * machine, or another Lobu by URL. Each may be ready at once (a signed-in
+ * login, a local Lobu already serving); otherwise this waits for it.
+ */
+function useConnect(reload: () => Promise<SetupStatus | null>) {
   const rpc = useRpc<typeof rpcContract>();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const { approval, wait } = useApprovalWait(reload, isConnected, () => undefined);
-  const starting = useCallback((s: SetupStatus) => isConnected(s) || !s.starting, []);
-  const local = useApprovalWait(reload, starting, () => undefined);
-  if (approval !== null) return <Approval url={approval.url} what="the sign-in to Lobu Cloud" />;
-  if (local.approval !== null) {
-    return <p className="text-xs text-muted-foreground">Starting Lobu on this machine. The first start takes about a minute.</p>;
-  }
+  const signIn = useApprovalWait(reload, isConnected, () => undefined);
+  const startedOrStopped = useCallback((s: SetupStatus) => isConnected(s) || !s.starting, []);
+  const start = useApprovalWait(reload, startedOrStopped, () => undefined);
   const act = (call: () => Promise<void>) => {
     setBusy(true);
     setError(null);
@@ -175,144 +175,156 @@ function ChooseStep({ status, reload }: { status: SetupStatus; reload: () => Pro
       .catch((cause: unknown) => setError(errorText(cause)))
       .finally(() => setBusy(false));
   };
-  // Either may already be ready: a signed-in Cloud login, or a local Lobu that is serving.
   const connectedNow = async () => {
     const next = await reload();
     return next !== null && isConnected(next);
   };
-  const useCloud = () =>
-    act(async () => {
-      const { approvalUrl } = await rpc.call("useCloud", {});
-      if (!(await connectedNow())) wait(approvalUrl);
-    });
-  const useLocal = () =>
-    act(async () => {
-      const { error: failure } = await rpc.call("useLocal", {});
-      if (failure !== null) setError(failure);
-      else if (!(await connectedNow())) local.wait(null);
-    });
-  const problem = error ?? status.login?.problem ?? null;
+  const waiting =
+    signIn.approval !== null ? (
+      <Approval url={signIn.approval.url} what="the sign-in" />
+    ) : start.approval !== null ? (
+      <p className="text-xs text-muted-foreground">Starting Lobu on this machine. The first start can take a few minutes.</p>
+    ) : null;
+  return {
+    error,
+    busy,
+    waiting,
+    useCloud: () =>
+      act(async () => {
+        const { approvalUrl } = await rpc.call("useCloud", {});
+        if (!(await connectedNow())) signIn.wait(approvalUrl);
+      }),
+    useLocal: () =>
+      act(async () => {
+        const { error: failure } = await rpc.call("useLocal", {});
+        if (failure !== null) setError(failure);
+        else if (!(await connectedNow())) start.wait(null);
+      }),
+    useOther: (name: string, url: string) =>
+      act(async () => {
+        const { approvalUrl } = await rpc.call("addLogin", { name, url });
+        if (!(await connectedNow())) signIn.wait(approvalUrl);
+      }),
+  };
+}
+
+type Connect = ReturnType<typeof useConnect>;
+
+function OtherLobu({ connect }: { connect: Connect }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  if (!open) {
+    return (
+      <Button variant="ghost" size="sm" disabled={connect.busy} onClick={() => setOpen(true)}>
+        Another Lobu…
+      </Button>
+    );
+  }
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    connect.useOther(name.trim(), url);
+  };
+  return (
+    <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
+      <input aria-label="Login name" placeholder="Name, e.g. work" required value={name} onChange={(e) => setName(e.target.value)} className={cn(field, "w-40")} />
+      <input aria-label="Lobu URL" type="url" placeholder="https://lobu.example.com" required value={url} onChange={(e) => setUrl(e.target.value)} className={cn(field, "w-56")} />
+      <Button type="submit" size="sm" variant="outline" disabled={connect.busy}>
+        Sign in
+      </Button>
+      <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)}>
+        Cancel
+      </Button>
+    </form>
+  );
+}
+
+function ConnectError({ connect, problem }: { connect: Connect; problem: string | null }) {
+  const shown = connect.error ?? problem;
+  return shown === null ? null : (
+    <p role="alert" className="text-xs text-destructive">
+      {shown}
+    </p>
+  );
+}
+
+/** Not connected yet: Lobu Cloud, Lobu on this machine, or another Lobu. */
+function ChooseStep({ status, reload }: { status: SetupStatus; reload: () => Promise<SetupStatus | null> }) {
+  const connect = useConnect(reload);
+  if (connect.waiting !== null) return connect.waiting;
   return (
     <div className="space-y-3 text-sm">
-      {problem === null ? null : (
-        <p role="alert" className="text-xs text-destructive">
-          {problem}
-        </p>
-      )}
+      <ConnectError connect={connect} problem={status.login?.problem ?? null} />
       <div className="space-y-1">
-        <Button size="sm" disabled={busy} onClick={useCloud}>
+        <Button size="sm" disabled={connect.busy} onClick={connect.useCloud}>
           Use Lobu Cloud
         </Button>
         <p className="text-xs text-muted-foreground">Sign in at app.lobu.ai. New to Lobu? You can create an account on the same page.</p>
       </div>
       <div className="space-y-1">
-        <Button size="sm" variant="outline" disabled={busy} onClick={useLocal}>
+        <Button size="sm" variant="outline" disabled={connect.busy} onClick={connect.useLocal}>
           Run Lobu on this machine
         </Button>
         <p className="text-xs text-muted-foreground">Your memory stays on this computer, and Lobu runs while bb does.</p>
       </div>
+      <OtherLobu connect={connect} />
     </div>
   );
 }
 
-function AddLogin({ reload, onAdded }: { reload: () => Promise<SetupStatus | null>; onAdded: (name: string) => void }) {
+const KIND_LABEL = { cloud: "Lobu Cloud", local: "Lobu on this machine" } as const;
+
+/** How many memories bb saved through this login, linking to them in Lobu. */
+function SavedSummary() {
   const rpc = useRpc<typeof rpcContract>();
-  const [name, setName] = useState("");
-  const [url, setUrl] = useState("https://app.lobu.ai");
-  const [adding, setAdding] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const added = useCallback((s: SetupStatus) => s.logins.some((c) => c.name === adding && c.loggedIn), [adding]);
-  const { approval, wait } = useApprovalWait(reload, added, () => adding !== null && onAdded(adding));
-  if (approval !== null && adding !== null) return <Approval url={approval.url} what={`the ${adding} login`} />;
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    const trimmed = name.trim();
-    rpc
-      .call("addLogin", { name: trimmed, url })
-      .then(
-        ({ approvalUrl }) => {
-          setAdding(trimmed);
-          wait(approvalUrl);
-        },
-        (cause: unknown) => setError(errorText(cause)),
-      )
-      .finally(() => setBusy(false));
-  };
+  const [saved, setSaved] = useState<{ url: string | null; count: number } | null>(null);
+  useEffect(() => {
+    rpc.call("savedLink", {}).then(setSaved, () => setSaved(null));
+  }, [rpc]);
+  if (saved === null || saved.count === 0) return null;
   return (
-    <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
-      <input aria-label="Login name" placeholder="Name, e.g. work" required value={name} onChange={(e) => setName(e.target.value)} className={cn(field, "w-40")} />
-      <input aria-label="Lobu URL" type="url" required value={url} onChange={(e) => setUrl(e.target.value)} className={cn(field, "w-56")} />
-      <Button type="submit" size="sm" variant="outline" disabled={busy}>
-        Add and sign in
-      </Button>
-      {error === null ? null : (
-        <span role="alert" className="text-xs text-destructive">
-          {error}
-        </span>
+    <p className="text-xs text-muted-foreground">
+      bb has saved {saved.count === 1 ? "1 memory" : `${saved.count} memories`} there.{" "}
+      {saved.url === null ? null : (
+        <UrlLink href={saved.url} className="text-foreground underline">
+          Open in Lobu
+        </UrlLink>
       )}
-    </form>
+    </p>
   );
 }
 
 function Connected({ status, reload }: { status: SetupStatus; reload: () => Promise<SetupStatus | null> }) {
-  const rpc = useRpc<typeof rpcContract>();
-  const [adding, setAdding] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const connect = useConnect(reload);
   const login = status.login!;
-  const use = (context: string | null) =>
-    rpc.call("useLogin", { context }).then(
-      () => reload(),
-      (cause: unknown) => setError(errorText(cause)),
-    );
+  const where = login.kind === "other" ? host(login.origin) : KIND_LABEL[login.kind];
   return (
-    <div className="space-y-3 text-sm">
-      <p className="text-muted-foreground">
-        Connected to {host(login.origin)}
-        {login.account === null ? "" : ` as ${login.account}`}.{" "}
-        {login.personal === null
-          ? "This login has no personal workspace, so agents ask where to save."
-          : `Agents save to your ${login.personal} workspace.`}
+    <div className="space-y-2 text-sm">
+      <p>
+        {where}
+        <span className="text-muted-foreground">
+          {login.account === null ? "" : ` · ${login.account}`}
+          {login.personal === null ? " · agents ask where to save" : ` · saves to ${login.personal}`}
+        </span>
       </p>
-      {status.logins.length > 0 ? (
+      <SavedSummary />
+      {connect.waiting ?? (
         <div className="flex flex-wrap items-center gap-2">
-          <label htmlFor="lobu-login" className="text-xs text-muted-foreground">
-            bb uses
-          </label>
-          <select
-            id="lobu-login"
-            className="h-8 max-w-72 cursor-pointer rounded-md border border-input bg-transparent px-2 text-xs"
-            value={login.context ?? ""}
-            onChange={(event) => void use(event.target.value)}
-          >
-            {status.logins.map((c) => (
-              <option key={c.name} value={c.name} disabled={!c.loggedIn}>
-                {c.name} · {host(c.origin)}
-                {c.loggedIn ? "" : " (signed out)"}
-              </option>
-            ))}
-          </select>
-          <Button variant="ghost" size="sm" onClick={() => setAdding((open) => !open)}>
-            {adding ? "Cancel" : "Add a login"}
-          </Button>
+          <span className="text-xs text-muted-foreground">Switch to</span>
+          {login.kind === "cloud" ? null : (
+            <Button variant="outline" size="sm" disabled={connect.busy} onClick={connect.useCloud}>
+              Lobu Cloud
+            </Button>
+          )}
+          {login.kind === "local" ? null : (
+            <Button variant="outline" size="sm" disabled={connect.busy} onClick={connect.useLocal}>
+              Lobu on this machine
+            </Button>
+          )}
+          <OtherLobu connect={connect} />
         </div>
-      ) : null}
-      {adding ? (
-        <AddLogin
-          reload={reload}
-          onAdded={(name) => {
-            setAdding(false);
-            void use(name);
-          }}
-        />
-      ) : null}
-      {error === null ? null : (
-        <p role="alert" className="text-xs text-destructive">
-          {error}
-        </p>
       )}
+      <ConnectError connect={connect} problem={null} />
     </div>
   );
 }

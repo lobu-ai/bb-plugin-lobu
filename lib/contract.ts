@@ -9,9 +9,6 @@ import {
   threadMemorySchema,
 } from "./memory-contract";
 
-const cliContextSchema = z.object({ name: z.string(), origin: z.string(), current: z.boolean(), loggedIn: z.boolean() });
-export type CliContextOption = z.infer<typeof cliContextSchema>;
-
 const setupStatusSchema = z.object({
   cli: z.discriminatedUnion("state", [
     z.object({ state: z.literal("missing") }),
@@ -23,11 +20,12 @@ const setupStatusSchema = z.object({
   installCommand: z.string().nullable(),
   /** The command to show when the button cannot run or fails. */
   manualCommand: z.string(),
-  logins: z.array(cliContextSchema),
   /** The login bb saves and searches through; null until the CLI runs. */
   login: z
     .object({
       context: z.string().nullable(),
+      /** Lobu Cloud (the CLI's `lobu` context), Lobu on this machine (`local`), or another Lobu. */
+      kind: z.enum(["cloud", "local", "other"]),
       origin: z.string(),
       /** Who it is signed in as; null when it is not signed in. */
       account: z.string().nullable(),
@@ -43,7 +41,7 @@ export type SetupStatus = z.infer<typeof setupStatusSchema>;
 const approvalSchema = z.object({ approvalUrl: z.string().nullable() });
 
 export const rpcContract = defineRpcContract({
-  /** Whether bb can reach Lobu: the CLI, the login bb uses, and every login to pick from. */
+  /** Whether bb can reach Lobu: the CLI and the login bb uses. */
   setupStatus: {
     input: z.object({}),
     output: setupStatusSchema,
@@ -63,20 +61,15 @@ export const rpcContract = defineRpcContract({
     input: z.object({}),
     output: z.object({ error: z.string().nullable() }),
   },
-  /** Adds a CLI context and starts its login. */
+  /** Adds a CLI context, makes it the login bb uses, and starts its sign-in. */
   addLogin: {
     input: z.object({ name: z.string().trim().min(1).max(64), url: z.string().trim().min(1) }),
     output: approvalSchema,
   },
-  /** Picks the login bb saves and searches through; null follows the CLI's active context. */
-  useLogin: {
-    input: z.object({ context: z.string().nullable() }),
-    output: z.object({ context: z.string().nullable() }),
-  },
-  /** Lobu's events page filtered to what bb saved through the login it uses; null when nothing is saved there. */
+  /** Lobu's events page filtered to what bb saved through the login it uses (null when nothing is saved there), and how many memories bb saved there. */
   savedLink: {
     input: z.object({}),
-    output: z.object({ url: z.string().nullable() }),
+    output: z.object({ url: z.string().nullable(), count: z.number() }),
   },
   /** Opens the review form in a thread with text the user picked. */
   remember: {

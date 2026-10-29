@@ -28,9 +28,11 @@ thread screen walks you through setup, one button at a time:
 3. The card disappears once bb is connected.
 
 The same steps live on in Settings → Plugins → Lobu, in a **Lobu account**
-section that shows which login bb uses and who it is signed in as. Pick
-another `lobu` CLI context there, or **Add a login** with a name and a Lobu
-URL, which adds the context and signs it in the same way.
+section: which Lobu bb uses, who it is signed in as, the workspace agents
+save to, and how many memories bb has saved there, with a link to them. Switch
+between Lobu Cloud and Lobu on this machine there, or pick **Another Lobu…**
+to add a self-hosted Lobu by name and URL, which adds a `lobu` CLI context
+and signs it in the same way.
 
 ## Memory
 
@@ -96,8 +98,10 @@ bb plugin install git:https://github.com/lobu-ai/bb-plugin-lobu.git
 
 ## How it talks to Lobu
 
-The plugin uses one `lobu` CLI login: the context in the `login` setting, or
-the CLI's active context when that is empty. bb opened from the Dock does not
+The plugin uses one `lobu` CLI login: the context picked in the Lobu account
+section (kept in the plugin's bb storage), or the CLI's active context until
+you pick one. It runs `~/.bun/bin/lobu`, else the first `lobu` on your login
+shell's `PATH`. bb opened from the Dock does not
 see your shell's `PATH`, so the plugin reads `PATH` once from your login shell
 and runs the CLI with it, the same way your terminal does. It reads the
 context's Lobu URL from `lobu context list --json`, and who it is signed in
@@ -120,20 +124,15 @@ Open them in bb under Settings → Plugins → Lobu, or use `bb plugin config lo
 
 | Setting | Default | Description |
 |---|---|---|
-| `hiddenWorkspaces` | empty | Comma-separated workspace slugs bb never saves to or searches. |
-| `login` | empty | The `lobu` CLI context bb saves and searches through: `lobu` for Lobu Cloud, `local` for Lobu on this machine. Empty follows the CLI's active context. Set it from the Lobu account section. |
-| `lobuBin` | empty | Path to the `lobu` CLI. Empty tries `~/.bun/bin/lobu`, then `lobu` on your login shell's `PATH`. |
 | `autoSave` | `true` | Save what agents learn to your personal workspace without asking. Off opens a review form for every save. |
-| `recapOnArchive` | `false` | Recap threads when you archive them and save what they learned. Needs `autoSave`. |
-| `recapProvider` | empty | Provider id for recaps, such as `acp-opencode`. Empty uses the archived thread's provider. |
-| `recapModel` | empty | Model for recaps. Empty uses the provider's default. |
+| `recapOnArchive` | `false` | Recap threads when you archive them, with the thread's own provider, and save what they learned. Needs `autoSave`. |
 
 ## Notes
 
 - Memory uses the workspaces the login bb uses covers. Each login only covers
   the workspaces you approved when you signed in. If one is missing, sign in
-  again and approve it, or add another login.
-- Picking a login needs CLI 24 or newer (`lobu context list --json`). With an
+  again and approve it.
+- Switching logins needs CLI 24 or newer (`lobu context list --json`). With an
   older CLI the plugin uses its active context on `https://app.lobu.ai`, and
   the setup card offers an update.
 

@@ -36,7 +36,7 @@ export default definePluginApp((app) => {
   app.slots.settingsSection({
     id: "account",
     title: "Lobu account",
-    description: "The lobu CLI login bb saves and searches through.",
+    description: "Where agents in bb save and search memory.",
     component: SetupSettings,
   });
 

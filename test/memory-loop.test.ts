@@ -34,11 +34,15 @@ function similarity(query: string, memory: StoredMemory): number {
 }
 
 let server: ReturnType<typeof Bun.serve>;
+const saved = { SHELL: process.env.SHELL, HOME: process.env.HOME, PATH: process.env.PATH };
 let root: string;
 
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "lobu-memory-loop-"));
+  // The plugin finds the fake `lobu` first on PATH; HOME keeps it from ~/.bun/bin.
   process.env.SHELL = join(root, "no-shell");
+  process.env.HOME = root;
+  process.env.PATH = `${root}:${saved.PATH}`;
   server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -128,6 +132,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  Object.assign(process.env, saved);
   server.stop(true);
   rmSync(root, { recursive: true, force: true });
 });
@@ -140,16 +145,7 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
   let instructions: ((ctx: { threadId: string; projectId: string }) => string | null) | null = null;
   let rpc: Record<string, (input: unknown) => unknown> = {};
   const formRequests: unknown[] = [];
-  const values = {
-    hiddenWorkspaces: "",
-    login: "",
-    lobuBin: join(root, "lobu"),
-    autoSave: true,
-    recapOnArchive: false,
-    recapProvider: "",
-    recapModel: "",
-    ...overrides,
-  };
+  const values = { autoSave: true, recapOnArchive: false, ...overrides };
   const bb = {
     pluginId: "lobu",
     settings: {
