@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { contextsForLobu } from "../lib/lobu-api";
+import { contextsForLobu, embeddableOrigin, parseCliContexts } from "../lib/lobu-api";
 
 const listed = {
   current: "side",
@@ -24,5 +24,25 @@ describe("contextsForLobu", () => {
   test("returns nothing for output it does not understand", () => {
     expect(contextsForLobu({ contexts: "nope" }, "https://app.lobu.example")).toEqual([]);
     expect(contextsForLobu(null, "https://app.lobu.example")).toEqual([]);
+  });
+});
+
+describe("the context picker", () => {
+  test("lists every context with its Lobu origin, the active one first", () => {
+    expect(parseCliContexts(listed).map((c) => [c.name, c.origin, c.loggedIn])).toEqual([
+      ["side", "https://app.lobu.example", true],
+      ["work", "https://app.lobu.example", true],
+      ["stale", "https://app.lobu.example", false],
+      ["local", "http://localhost:8787", true],
+    ]);
+  });
+
+  test("embeds Lobu only over HTTPS or on this machine", () => {
+    expect(embeddableOrigin("https://app.lobu.example/api/v1")).toBe("https://app.lobu.example");
+    expect(embeddableOrigin("http://localhost:8787")).toBe("http://localhost:8787");
+    expect(embeddableOrigin("http://127.0.0.1:8118/x")).toBe("http://127.0.0.1:8118");
+    expect(embeddableOrigin("http://lobu.example.com")).toBeNull();
+    expect(embeddableOrigin("javascript:alert(1)")).toBeNull();
+    expect(embeddableOrigin("not a url")).toBeNull();
   });
 });

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The Lobu page opens on the Lobu web app, signed in with your CLI login,
+  with a picker for your CLI contexts. Lobu must allow bb's address in its
+  `FRAME_ANCESTORS` setting to be framed.
 - Memory runs as a loop. New threads start with their project's Lobu brief:
   what you pinned there and what earlier threads learned, most used first.
 - Agents get `lobu_search`, which searches your personal workspace and the

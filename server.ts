@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import type { BbPluginApi, PluginThreadEventPayloads } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { type MetricPin, metricPinsSchema, rpcContract, type Snapshot } from "./lib/contract";
-import { createLobuApi } from "./lib/lobu-api";
+import { createLobuApi, embeddableOrigin } from "./lib/lobu-api";
 import {
   type MemoryDraft,
   type MemoryHit,
@@ -666,6 +666,21 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.rpc.register(rpcContract, {
     snapshot: ({ refresh }) => snapshot(refresh),
+    lobuContexts: async () => ({
+      contexts: (await api.cliContexts()) ?? [],
+      fallbackOrigin: embeddableOrigin((await apiOptions()).baseUrl) ?? "",
+    }),
+    lobuApp: async ({ context }) => {
+      const url =
+        context === null ? (await apiOptions()).baseUrl : (await api.cliContexts())?.find((c) => c.name === context)?.origin;
+      if (url === undefined) throw new Error(`The lobu CLI has no context named ${context}.`);
+      const origin = embeddableOrigin(url);
+      if (origin === null) throw new Error(`bb only embeds Lobu over HTTPS or on this machine, not ${url}.`);
+      const session = await api.webSession(context, origin);
+      // The session rides in the fragment, which never reaches a server; Lobu's
+      // bootstrap page strips it from history before signing the frame in.
+      return { url: `${origin}/api/extension-bootstrap#token=${encodeURIComponent(session)}`, origin };
+    },
     remember: async ({ threadId, text }) => {
       // The form stays open until the user answers, so do not hold the RPC.
       const opened = review(threadId, [draftFromText(text)]);

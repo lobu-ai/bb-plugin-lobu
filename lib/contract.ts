@@ -83,7 +83,20 @@ export const metricPinSchema = z.object({
 export type MetricPin = z.infer<typeof metricPinSchema>;
 export const metricPinsSchema = z.array(metricPinSchema);
 
+const cliContextSchema = z.object({ name: z.string(), origin: z.string(), current: z.boolean(), loggedIn: z.boolean() });
+export type CliContextOption = z.infer<typeof cliContextSchema>;
+
 export const rpcContract = defineRpcContract({
+  /** The `lobu` CLI contexts for the page's context picker. Empty when the CLI cannot list them; the page then uses the active login on fallbackOrigin. */
+  lobuContexts: {
+    input: z.object({}),
+    output: z.object({ contexts: z.array(cliContextSchema), fallbackOrigin: z.string() }),
+  },
+  /** The embedded Lobu app for one CLI context (null: the active one), signed in through a fresh web session. */
+  lobuApp: {
+    input: z.object({ context: z.string().nullable() }),
+    output: z.object({ url: z.string(), origin: z.string() }),
+  },
   snapshot: {
     input: z.object({ refresh: z.boolean() }),
     output: snapshotSchema,

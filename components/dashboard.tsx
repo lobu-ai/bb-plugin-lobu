@@ -11,6 +11,7 @@ import type {
   WorkspaceSummary,
 } from "@/lib/contract";
 import type { PendingReview } from "@/lib/memory-contract";
+import { LobuApp } from "@/components/lobu-app";
 import { MemoryTab } from "@/components/memory";
 import { RememberFields } from "@/components/remember-form";
 import { Button } from "@/components/ui/button";
@@ -366,17 +367,19 @@ function PendingReviews() {
 }
 
 const TAB_KEY = "lobu.dashboard.tab";
-type Tab = "workspaces" | "memory";
+const TABS = ["app", "workspaces", "memory"] as const;
+type Tab = (typeof TABS)[number];
 
 function readTab(): Tab {
   try {
-    return localStorage.getItem(TAB_KEY) === "memory" ? "memory" : "workspaces";
+    const stored = localStorage.getItem(TAB_KEY);
+    return TABS.find((tab) => tab === stored) ?? "app";
   } catch {
-    return "workspaces";
+    return "app";
   }
 }
 
-/** The page's two views, remembered across visits. */
+/** The page's views, remembered across visits. */
 function useTab() {
   const [tab, setTab] = useState<Tab>(readTab);
   const choose = (next: Tab) => {
@@ -409,7 +412,8 @@ function Tabs({ tab, onChoose, waiting }: { tab: Tab; onChoose: (tab: Tab) => vo
   );
   return (
     <div role="tablist" aria-label="Lobu views" className="inline-flex gap-0.5 rounded-lg bg-muted p-0.5">
-      {item("workspaces", "Workspaces", "lobu/inbox", waiting)}
+      {item("app", "Lobu", "lobu/lobu", 0)}
+      {item("workspaces", "Needs you", "lobu/inbox", waiting)}
       {item("memory", "Memory", "lobu/memory", 0)}
     </div>
   );
@@ -486,11 +490,13 @@ export function DashboardPage() {
   ];
   const devices = snapshot?.devices ?? [];
   const [tab, setTab] = useTab();
+  const tabs = <Tabs tab={tab} onChoose={setTab} waiting={total(all, (w) => countOf(w.needsYou))} />;
+  if (tab === "app") return <LobuApp leading={tabs} />;
   return (
     <div className="h-full min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto box-border w-full max-w-3xl space-y-4 px-4 pb-6 pt-3 md:px-5 md:pt-4">
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <Tabs tab={tab} onChoose={setTab} waiting={total(all, (w) => countOf(w.needsYou))} />
+          {tabs}
           <span className="ml-auto text-xs">
             {all.length} workspace{all.length === 1 ? "" : "s"}
             {snapshot === null ? null : ` · updated ${relativeTime(snapshot.fetchedAt)}`}

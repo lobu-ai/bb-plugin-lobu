@@ -44,15 +44,43 @@ function originOf(url: string): string | null {
   }
 }
 
-/** Contexts with a login on this Lobu, the active one first, from `lobu context list --json`. */
-export function contextsForLobu(listed: unknown, baseUrl: string): string[] {
+/** A `lobu` CLI context and the Lobu origin it logs in to. */
+export interface CliContext {
+  name: string;
+  origin: string;
+  current: boolean;
+  loggedIn: boolean;
+}
+
+/** Every context from `lobu context list --json`, the active one first. */
+export function parseCliContexts(listed: unknown): CliContext[] {
   const parsed = cliContextsSchema.safeParse(listed);
   if (!parsed.success) return [];
-  const origin = originOf(baseUrl);
   return parsed.data.contexts
-    .filter((context) => context.loggedIn && origin !== null && originOf(context.url) === origin)
-    .sort((a, b) => Number(b.current) - Number(a.current))
+    .flatMap((context) => {
+      const origin = originOf(context.url);
+      return origin === null ? [] : [{ name: context.name, origin, current: context.current, loggedIn: context.loggedIn }];
+    })
+    .sort((a, b) => Number(b.current) - Number(a.current));
+}
+
+/** Contexts with a login on this Lobu, the active one first. */
+export function contextsForLobu(listed: unknown, baseUrl: string): string[] {
+  const origin = originOf(baseUrl);
+  return parseCliContexts(listed)
+    .filter((context) => context.loggedIn && context.origin === origin)
     .map((context) => context.name);
+}
+
+/** Lobu origins the embedded app may load: HTTPS, or HTTP on this machine. */
+export function embeddableOrigin(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+    return parsed.protocol === "https:" || (parsed.protocol === "http:" && loopback) ? parsed.origin : null;
+  } catch {
+    return null;
+  }
 }
 
 export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
@@ -124,6 +152,43 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
       } catch {
         return null;
       }
+    },
+
+    /** Every CLI context for the context picker; null when the CLI cannot list them as JSON. */
+    async cliContexts(): Promise<CliContext[] | null> {
+      try {
+        const listed = parseCliContexts(JSON.parse(await runLobu(["context", "list", "--json"])));
+        return listed.length === 0 ? null : listed;
+      } catch {
+        return null;
+      }
+    },
+
+    /**
+     * A Lobu web session for this CLI login, minted by the route Lobu's own
+     * extension and Mac app use. The page gets this session, never the CLI token.
+     */
+    async webSession(context: string | null, origin: string): Promise<string> {
+      for (const fresh of [false, true]) {
+        const response = await fetch(`${origin}/api/extension-session`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ token: await token(context, fresh) }).toString(),
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+        if (response.status === 401 && !fresh) continue;
+        const body = (await response.json().catch(() => null)) as {
+          session_token?: unknown;
+          error_description?: unknown;
+        } | null;
+        if (response.ok && typeof body?.session_token === "string") return body.session_token;
+        const detail = typeof body?.error_description === "string" ? `: ${body.error_description}` : "";
+        if (response.status === 401 || response.status === 403) {
+          throw new LobuSetupError("not_logged_in", context, `Lobu would not open the app for ${contextLabel(context)}${detail}.`);
+        }
+        throw new Error(`Lobu returned ${response.status} when opening the app${detail}.`);
+      }
+      throw new Error("unreachable");
     },
 
     /** Workspaces the login for this CLI context is authorized for. */

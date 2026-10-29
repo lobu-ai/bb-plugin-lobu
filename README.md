@@ -8,7 +8,12 @@ memory, without leaving bb.
 
 ## What you get
 
-A **Lobu** page in the bb sidebar covering every workspace your `lobu` CLI
+A **Lobu** page in the bb sidebar. It opens on the Lobu web app itself, signed
+in with your `lobu` CLI login, the way the Lobu Mac app shows it. When the CLI
+has more than one context, a picker above the app switches between them. The
+Lobu server has to allow bb's address to frame it; see [Notes](#notes).
+
+The **Needs you** tab covers every workspace your `lobu` CLI
 logins can reach. A row of workspace chips at the top narrows the page to one
 workspace (the choice is remembered), and the cards are grouped by workspace:
 
@@ -114,8 +119,12 @@ Memory writes use Lobu's own tools: `save_memory` to save, and `run_sdk` with
 `search_memory`. What the plugin saved, project links, pins, and each
 thread's log stay in the plugin's bb storage. Recaps read the archived thread through bb's
 own thread API and keep their proposals in the plugin's bb storage until you
-review them. Tokens stay in the bb server process; the page
-only receives summaries and the form's contents.
+review them. CLI tokens stay in the bb server process. The page receives
+summaries, the form's contents, and, for the embedded app, a Lobu web session
+the server mints with Lobu's `/api/extension-session`, the route Lobu's Chrome
+extension and Mac app use. The session reaches the frame in the URL fragment,
+which is never sent to a server, and Lobu's bootstrap page removes it from
+history before signing the frame in.
 
 ## Settings
 
@@ -141,6 +150,11 @@ Open them in bb under Settings → Plugins → Lobu, or use `bb plugin config lo
   `lobu login --context <name>`; it shows up on the next refresh.
 - Reading every login needs a Lobu CLI with `lobu context list --json`. An
   older CLI shows only its active context's workspaces.
+- The embedded app needs the Lobu server to allow bb as a frame ancestor.
+  Lobu sends `frame-ancestors` from its `FRAME_ANCESTORS` setting, so a
+  self-hosted Lobu adds bb's address there, for example
+  `http://127.0.0.1:38886`. Until it does, the frame shows the browser's
+  blocked-page icon; **Open in browser** still works.
 - "Items synced" counts every item a feed run fetched, including ones it had
   already seen, so it measures sync volume rather than new data.
 - The 24-hour activity scan reads at most the newest 3,000 feed runs per
