@@ -225,8 +225,11 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   function projectView(projectId: string): ProjectMemory {
-    const { name, workspace, pins, learned, brief } = projectState(projectId);
-    return { id: projectId, name, workspace, pins, brief: brief?.text ?? null, learned: learned.length };
+    const { name, workspace, pins, brief } = projectState(projectId);
+    const learned = (brief?.given ?? []).flatMap(({ eventId, workspace: slug, title, source }) =>
+      source === "learned" ? [{ eventId, workspace: slug, title }] : [],
+    );
+    return { id: projectId, name, workspace, pins, learned };
   }
 
   async function projectOfThread(threadId: string): Promise<string | null> {

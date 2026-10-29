@@ -103,15 +103,14 @@ export type ThreadLog = z.infer<typeof threadLogSchema>;
 
 const workspaceOptionSchema = z.object({ slug: z.string(), name: z.string() });
 
-/** A bb project with its Lobu link, pins, and the brief its threads start with. */
+/** A bb project with its Lobu link, pins, and what its new threads start with. */
 export const projectMemorySchema = z.object({
   id: z.string(),
   name: z.string(),
   workspace: z.string().nullable(),
   pins: z.array(pinnedMemorySchema),
-  /** Exactly what a new thread here receives; null when there is nothing to give. */
-  brief: z.string().nullable(),
-  learned: z.number(),
+  /** The learned memories a new thread here receives after the pins, in brief order. */
+  learned: z.array(z.object({ eventId: z.number().nullable(), workspace: z.string(), title: z.string() })),
 });
 export type ProjectMemory = z.infer<typeof projectMemorySchema>;
 

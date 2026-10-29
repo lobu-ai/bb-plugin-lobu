@@ -260,10 +260,12 @@ describe("the memory loop", () => {
     // A note is saved to the personal workspace, pinned, and leads the brief.
     const project = (await rpc.addNote!({ projectId: "proj-1", text: "Release notes go in CHANGELOG.md" })) as {
       pins: { title: string }[];
-      brief: string;
     };
     expect(project.pins.map((p) => p.title)).toEqual(["Release notes go in CHANGELOG.md"]);
-    expect(project.brief.indexOf("Pinned by the user:")).toBeLessThan(project.brief.indexOf("Learned in earlier threads"));
+    const withNote = brief("thread-8")!;
+    expect(withNote.indexOf("Pinned by the user:")).toBeLessThan(withNote.indexOf("Learned in earlier threads"));
+    // A pinned note leads the brief once, not again among what was learned.
+    expect(withNote.split("Release notes go in CHANGELOG.md")).toHaveLength(2);
     const fakeLobuNote = lobu.memories.find((m) => m.title === "Release notes go in CHANGELOG.md")!;
     // Lobu's idempotency returns the same memory for the same note; the fake does too.
     const savedCount = lobu.memories.length;
@@ -276,14 +278,12 @@ describe("the memory loop", () => {
     // The New thread screen shows the project in view as a new thread there receives it.
     const home = (await rpc.projectMemory!({ projectId: "proj-1" })) as {
       personal: string;
-      project: { name: string; workspace: string; pins: unknown[]; learned: number; brief: string };
+      project: { name: string; workspace: string; pins: { title: string }[]; learned: { title: string }[] };
     };
     expect(home.personal).toBe("me");
-    expect(home.project).toMatchObject({ name: "Acme app", workspace: "team", learned: 2 });
-    expect(home.project.pins).toHaveLength(1);
-    expect(home.project.brief).toBe(project.brief);
-    // A pinned note leads the brief once, not again among what was learned.
-    expect(home.project.brief.split("Release notes go in CHANGELOG.md")).toHaveLength(2);
+    expect(home.project).toMatchObject({ name: "Acme app", workspace: "team" });
+    expect(home.project.pins.map((p) => p.title)).toEqual(["Release notes go in CHANGELOG.md"]);
+    expect(home.project.learned.map((l) => l.title).sort()).toEqual([deployGotcha.title, prPreference.title].sort());
 
     // Undo hides the memory in Lobu and drops it from the plugin's list.
     const preference = afterSearch.saved.find((r) => r.title === prPreference.title)!;

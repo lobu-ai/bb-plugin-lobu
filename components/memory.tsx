@@ -315,6 +315,11 @@ function HitRow({ hit }: { hit: MemoryHit }) {
 }
 
 /** A project's Lobu link, pins, a note box, and the brief new threads get. */
+/**
+ * What a new thread in the project starts with, as the brief gives it: pins
+ * first, then what earlier threads learned. Below it, a note to pin and the
+ * team workspace agents also search.
+ */
 function ProjectContext({
   project,
   workspaces,
@@ -326,32 +331,17 @@ function ProjectContext({
 }) {
   const rpc = useRpc<typeof rpcContract>();
   const { busy, error, notice, run } = useActions();
+  const [noting, setNoting] = useState(false);
   const [note, setNote] = useState("");
+  const empty = project.pins.length === 0 && project.learned.length === 0;
   return (
-    <div className="space-y-3 py-3">
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span>Team knowledge from</span>
-        <WorkspaceSelect
-          label={`Lobu workspace linked to ${project.name}`}
-          value={project.workspace}
-          workspaces={workspaces}
-          placeholder="No linked workspace"
-          onChange={(workspace) =>
-            void run("link", async () => {
-              onProject(await rpc.call("linkProject", { projectId: project.id, workspace }));
-              return workspace === null ? "Unlinked." : `Agents here now also search ${workspace}.`;
-            })
-          }
-        />
-        <span>plus your personal workspace.</span>
-      </div>
-
-      {project.pins.length === 0 ? (
+    <div className="space-y-2 py-2">
+      {empty ? (
         <p className="text-xs text-muted-foreground">
-          Nothing pinned yet. Pinned notes and memories open every new thread in {project.name}.
+          What agents learn in {project.name} shows up here, and notes you add are pinned at the top.
         </p>
       ) : (
-        <ul className="divide-y divide-border rounded-md border border-border px-3">
+        <ul className="divide-y divide-border">
           {project.pins.map((pin) => (
             <PinRow
               key={pin.pinnedAt}
@@ -364,52 +354,69 @@ function ProjectContext({
               }
             />
           ))}
+          {project.learned.map((item) => (
+            <li key={`${item.workspace}-${item.eventId ?? item.title}`} className="flex items-start gap-2 py-2 text-sm">
+              <Icon name="lobu/memory" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">{item.title}</span>
+            </li>
+          ))}
         </ul>
       )}
 
-      <form
-        className="space-y-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const text = note.trim();
-          if (text === "") return;
-          void run("note", async () => {
-            onProject(await rpc.call("addNote", { projectId: project.id, text }));
-            setNote("");
-            return "Saved to your personal workspace and pinned here.";
-          });
-        }}
-      >
-        <textarea
-          aria-label={`Add context for ${project.name}`}
-          className="min-h-16 w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          placeholder={`Add something every new thread in ${project.name} should know…`}
-          value={note}
-          onChange={(event) => setNote(event.target.value)}
-        />
-        <div className="flex items-center gap-2">
+      {noting ? (
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const text = note.trim();
+            if (text === "") return;
+            void run("note", async () => {
+              onProject(await rpc.call("addNote", { projectId: project.id, text }));
+              setNote("");
+              setNoting(false);
+              return "Saved to your personal workspace and pinned here.";
+            });
+          }}
+        >
+          <input
+            aria-label={`Add a note for ${project.name}`}
+            autoFocus
+            className="h-8 min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            placeholder={`Something every new thread in ${project.name} should know`}
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+          />
           <Button type="submit" size="sm" disabled={note.trim() === "" || busy === "note"}>
-            <Icon name="lobu/plus" />
-            Add and pin
+            Pin
           </Button>
-          <Status error={error} notice={notice} />
-        </div>
-      </form>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setNoting(false)}>
+            Cancel
+          </Button>
+        </form>
+      ) : null}
 
-      <details className="group rounded-md border border-border">
-        <summary className="cursor-pointer select-none px-3 py-2 text-xs text-muted-foreground hover:text-foreground">
-          What new threads in {project.name} start with
-        </summary>
-        {project.brief === null ? (
-          <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
-            Nothing yet. Pin something, or let agents save what they learn here.
-          </p>
-        ) : (
-          <pre className="max-h-72 overflow-auto whitespace-pre-wrap border-t border-border px-3 py-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
-            {project.brief}
-          </pre>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        {noting ? null : (
+          <Button variant="ghost" size="sm" onClick={() => setNoting(true)}>
+            <Icon name="lobu/plus" />
+            Add a note
+          </Button>
         )}
-      </details>
+        <span>Agents also search</span>
+        <WorkspaceSelect
+          label={`Lobu workspace linked to ${project.name}`}
+          value={project.workspace}
+          workspaces={workspaces}
+          placeholder="no team workspace"
+          onChange={(workspace) =>
+            void run("link", async () => {
+              onProject(await rpc.call("linkProject", { projectId: project.id, workspace }));
+              return workspace === null ? "Unlinked." : `Agents here now also search ${workspace}.`;
+            })
+          }
+        />
+        <Status error={error} notice={notice} />
+      </div>
     </div>
   );
 }
@@ -430,7 +437,7 @@ export function ProjectBrief({ projectId }: { projectId: string }) {
   const { project } = view;
   const parts = [
     project.pins.length === 0 ? null : `${project.pins.length} pinned`,
-    project.learned === 0 ? null : `${project.learned} learned in earlier threads`,
+    project.learned.length === 0 ? null : `${project.learned.length} learned in earlier threads`,
   ].filter((part) => part !== null);
   return (
     <section className="space-y-1 rounded-lg border border-border px-4 py-2">
@@ -440,7 +447,7 @@ export function ProjectBrief({ projectId }: { projectId: string }) {
           {parts.length === 0 ? "nothing yet" : parts.join(" and ")}.
         </p>
         <Button variant="ghost" size="sm" onClick={() => setOpen((shown) => !shown)}>
-          {open ? "Hide" : parts.length === 0 ? "Add a note" : "Show"}
+          {open ? "Hide" : "Show"}
         </Button>
       </div>
       {open ? <ProjectContext project={project} workspaces={view.workspaces} onProject={(next) => setView({ ...view, project: next })} /> : null}
