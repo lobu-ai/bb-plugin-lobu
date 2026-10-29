@@ -3,7 +3,7 @@
 // threads start with their project's Lobu brief, agents search Lobu with
 // lobu_search, and what they learn is saved to the personal workspace (or
 // reviewed in a form first, when auto-save is off). Every save can be undone,
-// moved, or pinned from the thread's Lobu memory panel and the Lobu page.
+// or pinned from the thread's Lobu memory panel and the Lobu page.
 import { randomUUID } from "node:crypto";
 import type { BbPluginApi, PluginThreadEventPayloads } from "@get-bb/plugin-sdk";
 import { z } from "zod";
@@ -344,7 +344,7 @@ export default async function plugin(bb: BbPluginApi) {
     for (const failure of outcome.failed) lines.push(`Not saved: ${failure.title} (${failure.error})`);
     if (outcome.saved.length > 0) {
       lines.push(
-        "In your reply, tell the user in one short line what you saved to Lobu. They can undo, move, or pin it from the thread's Lobu memory panel.",
+        "In your reply, tell the user in one short line what you saved to Lobu. They can undo or pin it from the thread's Lobu memory panel.",
       );
     }
     return lines.join("\n");
@@ -575,7 +575,7 @@ export default async function plugin(bb: BbPluginApi) {
     description:
       "Save memories worth keeping to the user's Lobu memory. With the user's auto-save setting on, they go straight to the personal workspace and the user can undo them; otherwise the user reviews them in a form first.",
     instructions:
-      "When a task leaves something worth keeping across sessions, call lobu_remember once at the end with at most three short, self-contained memories. Propose one only if a different agent, on a different task next month, would act differently because of it: a decision, a non-obvious fact or gotcha, or a preference the user stated as a standing rule. Most tasks contain nothing worth keeping; then do not call the tool. Never propose what the task built or changed, anything the repo or code already states, generic quality wishes, task requirements, or one-off values. Each memory needs a short evidence quote of the turn or finding it came from. Never include secrets, credentials, or temporary state. Name the workspace a memory belongs to when it is team knowledge rather than the user's own. Use lobu_remember rather than other memory-saving tools, so the user can see, undo, and move what was saved.",
+      "When a task leaves something worth keeping across sessions, call lobu_remember once at the end with at most three short, self-contained memories. Propose one only if a different agent, on a different task next month, would act differently because of it: a decision, a non-obvious fact or gotcha, or a preference the user stated as a standing rule. Most tasks contain nothing worth keeping; then do not call the tool. Never propose what the task built or changed, anything the repo or code already states, generic quality wishes, task requirements, or one-off values. Each memory needs a short evidence quote of the turn or finding it came from. Never include secrets, credentials, or temporary state. Name the workspace a memory belongs to when it is team knowledge rather than the user's own. Use lobu_remember rather than other memory-saving tools, so the user can see and undo what was saved.",
     presentation: {
       label: { pending: "Saving memories to Lobu", completed: "Lobu memory" },
       icon: { glyph: "lobu/memory" },
