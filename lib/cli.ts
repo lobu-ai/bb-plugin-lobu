@@ -2,8 +2,8 @@
 // Dock inherits launchd's PATH (/usr/bin:/bin:/usr/sbin:/sbin), so the CLI's
 // `#!/usr/bin/env node` cannot find a Homebrew, nvm, or Bun install of node.
 // The plugin therefore runs it with the PATH the user's login shell sets up.
-import { execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { closeSync, existsSync, openSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
@@ -204,6 +204,20 @@ export function createCliRunner(lobuBin: string) {
       } finally {
         // The binary may now live somewhere the cached lookup did not find it.
         prepared = null;
+      }
+    },
+
+    /**
+     * Starts a long-running command, like `lobu run`, in `cwd` with extra
+     * environment variables, appending its output to `logFile`.
+     */
+    async serve(args: string[], options: { cwd: string; env: Record<string, string>; logFile: string }): Promise<ChildProcess> {
+      const { bin, env } = await prepare();
+      const log = openSync(options.logFile, "a");
+      try {
+        return spawn(bin, args, { cwd: options.cwd, env: { ...env, ...options.env }, stdio: ["ignore", log, log] });
+      } finally {
+        closeSync(log);
       }
     },
 

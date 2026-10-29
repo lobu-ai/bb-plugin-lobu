@@ -44,15 +44,6 @@ beforeAll(() => {
     async fetch(request) {
       if (request.headers.get("authorization") !== `Bearer ${TOKEN}`) return new Response("no", { status: 401 });
       const url = new URL(request.url);
-      if (url.pathname === "/oauth/userinfo") {
-        return Response.json({
-          email: "someone@example.com",
-          organizations: [
-            { slug: "me", name: "Me", personal: true },
-            { slug: "team", name: "Team" },
-          ],
-        });
-      }
       const match = url.pathname.match(/^\/api\/([^/]+)\/([a-z_]+)$/);
       if (match === null) return new Response("not found", { status: 404 });
       const [, workspace, tool] = match as unknown as [string, string, string];
@@ -105,12 +96,28 @@ beforeAll(() => {
     current: "work",
     contexts: [{ name: "work", url: `http://localhost:${server.port}/api/v1`, current: true, loggedIn: true }],
   });
+  const whoami = JSON.stringify({
+    loggedIn: true,
+    context: "work",
+    apiUrl: `http://localhost:${server.port}/api/v1`,
+    local: true,
+    email: "someone@example.com",
+    hasAccessToken: true,
+    accessToken: "synthetic-session-token",
+    hasWorkerToken: true,
+    workerToken: TOKEN,
+    personalOrgSlug: "me",
+    organizations: [
+      { slug: "me", name: "Me" },
+      { slug: "team", name: "Team" },
+    ],
+  });
   const cli = join(root, "lobu");
   writeFileSync(
     cli,
     [
       "#!/bin/sh",
-      `if [ "$1" = token ]; then echo ${TOKEN}; exit 0; fi`,
+      `if [ "$1" = whoami ]; then echo '${whoami}'; exit 0; fi`,
       'if [ "$1" = --version ]; then echo 24.2.0; exit 0; fi',
       `if [ "$1" = context ] && [ "$2" = list ]; then echo '${contexts}'; exit 0; fi`,
       "exit 1",
@@ -185,6 +192,7 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
       },
     },
     log: { info: () => undefined, warn: () => undefined },
+    onDispose: () => undefined,
   };
   await plugin(bb as unknown as BbPluginApi);
   // Let the startup project listing settle.
@@ -280,6 +288,7 @@ describe("the memory loop", () => {
     const status = (await rpc.setupStatus!({})) as { cli: { state: string }; login: { context: string; account: string; personal: string; problem: null } };
     expect(status.cli.state).toBe("ready");
     expect(status.login).toMatchObject({ context: "work", account: "someone@example.com", personal: "me", problem: null });
+    expect(status).toMatchObject({ starting: false });
 
     // "Open in Lobu" lands on the events page filtered to what bb saved and has not undone.
     const { url } = (await rpc.savedLink!({})) as { url: string };

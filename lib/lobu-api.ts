@@ -3,8 +3,8 @@
 import { z } from "zod";
 import { cliFailure, createCliRunner, LobuSetupError } from "./cli";
 
-/** How long a minted token is reused before asking the CLI again. */
-const TOKEN_TTL_MS = 5 * 60_000;
+/** How long a `lobu whoami` session is reused before asking the CLI again. */
+const SESSION_TTL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 
 export interface Workspace {
@@ -25,6 +25,50 @@ export interface SaveMemoryInput {
 export interface SavedMemory {
   id: number;
   viewUrl: string | null;
+}
+
+/** A CLI login as `lobu whoami --json` reports it, the same source the Lobu Mac app reads. */
+export interface Session {
+  account: string | null;
+  /** The bearer token for Lobu's API; null when the login is signed out. */
+  token: string | null;
+  workspaces: Workspace[];
+}
+
+const whoamiSchema = z.object({
+  loggedIn: z.boolean(),
+  local: z.boolean(),
+  email: z.string().optional(),
+  accessToken: z.string().optional(),
+  workerToken: z.string().optional(),
+  orgSlug: z.string().optional(),
+  personalOrgSlug: z.string().optional(),
+  organizations: z.array(z.object({ slug: z.string(), name: z.string().optional() })),
+});
+
+/**
+ * Reads `lobu whoami --json --include-tokens`. A Lobu on this machine takes
+ * the worker token its `lobu run` minted, as in the Mac app; a remote Lobu
+ * takes the session's access token. As in the Mac app, a Lobu that names no
+ * personal workspace (a new local install lists none) saves to the login's own.
+ */
+export function parseWhoami(output: string): Session | null {
+  let parsed: z.infer<typeof whoamiSchema>;
+  try {
+    const result = whoamiSchema.safeParse(JSON.parse(output.trim().split("\n").pop() ?? ""));
+    if (!result.success) return null;
+    parsed = result.data;
+  } catch {
+    return null;
+  }
+  const token = parsed.local ? (parsed.workerToken ?? parsed.accessToken) : parsed.accessToken;
+  const personal = parsed.personalOrgSlug ?? parsed.orgSlug;
+  const listed = parsed.organizations.length > 0 || parsed.orgSlug === undefined ? parsed.organizations : [{ slug: parsed.orgSlug }];
+  return {
+    account: parsed.email ?? null,
+    token: parsed.loggedIn && token ? token : null,
+    workspaces: listed.map((org) => ({ slug: org.slug, name: org.name ?? org.slug, personal: org.slug === personal })),
+  };
 }
 
 export interface LobuApiOptions {
@@ -78,30 +122,28 @@ export function lobuOrigin(url: string): string | null {
 export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
   const cli = createCliRunner(lobuBin);
   const runLobu = cli.run;
-  const tokens = new Map<string, { value: string; mintedAt: number }>();
+  const sessions = new Map<string, { session: Session; at: number }>();
   const contextLabel = (context: string | null) => context ?? "the active context";
 
-  async function token(context: string | null, fresh: boolean): Promise<string> {
+  /** The session `lobu whoami` reports for a context, reused for a few minutes. */
+  async function session(context: string | null, fresh: boolean): Promise<Session> {
     const key = context ?? "";
-    const hit = tokens.get(key);
-    if (!fresh && hit && Date.now() - hit.mintedAt < TOKEN_TTL_MS) return hit.value;
-    const args = ["token", "--raw", ...(context === null ? [] : ["--context", context])];
+    const hit = sessions.get(key);
+    if (!fresh && hit && Date.now() - hit.at < SESSION_TTL_MS) return hit.session;
+    const args = ["whoami", "--json", "--include-tokens", ...(context === null ? [] : ["--context", context])];
     let stdout: string;
     try {
       stdout = await runLobu(args);
     } catch (error) {
       throw cliFailure(error, context);
     }
-    const value = stdout.trim().split("\n").pop()?.trim() ?? "";
-    if (value.length < 20) {
-      throw new LobuSetupError(
-        "not_logged_in",
-        context,
-        `The lobu CLI has no login for ${contextLabel(context)}.`,
-      );
+    const parsed = parseWhoami(stdout);
+    if (parsed === null) throw new LobuSetupError("cli_failed", context, "lobu whoami printed something bb cannot read.");
+    if (parsed.token === null) {
+      throw new LobuSetupError("not_logged_in", context, `The lobu CLI has no login for ${contextLabel(context)}.`);
     }
-    tokens.set(key, { value, mintedAt: Date.now() });
-    return value;
+    sessions.set(key, { session: parsed, at: Date.now() });
+    return parsed;
   }
 
   async function request(context: string | null, path: string, body?: unknown): Promise<unknown> {
@@ -110,7 +152,7 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
       const response = await fetch(`${baseUrl}${path}`, {
         method: body === undefined ? "GET" : "POST",
         headers: {
-          Authorization: `Bearer ${await token(context, fresh)}`,
+          Authorization: `Bearer ${(await session(context, fresh)).token}`,
           "Content-Type": "application/json",
         },
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -132,19 +174,8 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
   }
 
   /** Who this CLI context is signed in as, and the workspaces it is authorized for. */
-  async function identity(context: string | null): Promise<{ account: string | null; workspaces: Workspace[] }> {
-    const info = (await request(context, "/oauth/userinfo")) as {
-      email?: string;
-      organizations?: { slug: string; name?: string; personal?: boolean }[];
-    };
-    return {
-      account: typeof info.email === "string" ? info.email : null,
-      workspaces: (info.organizations ?? []).map((org) => ({
-        slug: org.slug,
-        name: org.name ?? org.slug,
-        personal: org.personal === true,
-      })),
-    };
+  async function identity(context: string | null): Promise<Session> {
+    return session(context, true);
   }
 
   /** Every CLI context, the active one first; null when the CLI cannot list them as JSON. */
@@ -192,6 +223,7 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
     cliState: cli.state,
     installer: cli.installer,
     installCli: cli.install,
+    serve: cli.serve,
 
     async workspaces(context: string | null): Promise<Workspace[]> {
       return (await identity(context)).workspaces;

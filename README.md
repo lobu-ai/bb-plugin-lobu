@@ -14,9 +14,17 @@ thread screen walks you through setup, one button at a time:
    with sudo, then checks that `lobu --version` runs. If that fails, or
    neither tool is found, the card shows the command to run yourself and a
    **Check again** button. An older CLI gets an **Update** button instead.
-2. **Sign in.** The button runs `lobu login`, which opens Lobu's approval page
-   in your browser. You can create a Lobu account there too. The card
-   updates once you approve.
+2. **Choose where your memory lives**, as in the Lobu Mac app:
+   - **Use Lobu Cloud** runs `lobu login --context lobu`, which opens Lobu's
+     approval page in your browser. You can create a Lobu account there too.
+     The card updates once you approve.
+   - **Run Lobu on this machine** uses a local Lobu that is already serving
+     (the Mac app's, or your own `lobu run`) through the `local` CLI context.
+     Otherwise it starts `lobu run` in `~/lobu-bb`, a project whose `.env`
+     holds the key Lobu encrypts stored secrets with, and stops it when bb
+     stops. `lobu run` signs the `local` context in by itself. The Mac app's
+     own project (`~/lobu`) keeps its key in the Keychain, so bb never starts
+     it: open the Lobu app instead.
 3. The card disappears once bb is connected.
 
 The same steps live on in Settings → Plugins → Lobu, in a **Lobu account**
@@ -92,8 +100,10 @@ The plugin uses one `lobu` CLI login: the context in the `login` setting, or
 the CLI's active context when that is empty. bb opened from the Dock does not
 see your shell's `PATH`, so the plugin reads `PATH` once from your login shell
 and runs the CLI with it, the same way your terminal does. It reads the
-context's Lobu URL from `lobu context list --json`, runs `lobu token --raw`,
-and asks Lobu which workspaces that login covers.
+context's Lobu URL from `lobu context list --json`, and who it is signed in
+as, its workspaces, and its token from `lobu whoami --json --include-tokens`,
+the same source the Lobu Mac app reads. A Lobu on this machine takes the
+worker token its `lobu run` minted.
 
 Memory writes use Lobu's own tools: `save_memory` to save, and `run_sdk` with
 `knowledge.delete` to undo. Searches use
@@ -111,7 +121,7 @@ Open them in bb under Settings → Plugins → Lobu, or use `bb plugin config lo
 | Setting | Default | Description |
 |---|---|---|
 | `hiddenWorkspaces` | empty | Comma-separated workspace slugs bb never saves to or searches. |
-| `login` | empty | The `lobu` CLI context bb saves and searches through. Empty follows the CLI's active context. Set it from the Lobu account section. |
+| `login` | empty | The `lobu` CLI context bb saves and searches through: `lobu` for Lobu Cloud, `local` for Lobu on this machine. Empty follows the CLI's active context. Set it from the Lobu account section. |
 | `lobuBin` | empty | Path to the `lobu` CLI. Empty tries `~/.bun/bin/lobu`, then `lobu` on your login shell's `PATH`. |
 | `autoSave` | `true` | Save what agents learn to your personal workspace without asking. Off opens a review form for every save. |
 | `recapOnArchive` | `false` | Recap threads when you archive them and save what they learned. Needs `autoSave`. |

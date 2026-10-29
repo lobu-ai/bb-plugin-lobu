@@ -11,8 +11,9 @@ Keep what your agents learn in Lobu memory, without leaving bb.
 
 ## Getting started
 
-A card on the New thread screen installs the Lobu CLI with bun or npm and
-signs you in through Lobu's approval page. Settings → Plugins → Lobu shows the
+A card on the New thread screen installs the Lobu CLI with bun or npm, then,
+as in the Lobu Mac app, signs you in to Lobu Cloud or runs Lobu on this
+machine. Settings → Plugins → Lobu shows the
 login bb uses and lets you switch or add one.
 
 ## How it works

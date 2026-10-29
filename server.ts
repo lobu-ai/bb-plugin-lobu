@@ -3,12 +3,16 @@
 // agents search Lobu with lobu_search, and what they learn is saved to the
 // personal workspace (or reviewed in a form first, when auto-save is off).
 // Every save can be undone or pinned from the thread's Lobu memory panel. A
-// card on the New thread screen installs the CLI and signs in when needed.
+// card on the New thread screen sets Lobu up like the Lobu Mac app: install the
+// CLI, then sign in to Lobu Cloud or run Lobu on this machine.
 import type { BbPluginApi, PluginThreadEventPayloads } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { rpcContract } from "./lib/contract";
 import { CLI_MAJOR, FALLBACK_INSTALL, LobuSetupError } from "./lib/cli";
+import type { ChildProcess } from "node:child_process";
+import { homedir } from "node:os";
 import { createLobuApi, lobuOrigin } from "./lib/lobu-api";
+import { hasProject, isServing, lastLogLine, LOCAL_CONTEXT, localFolders, localPort, startLocal } from "./lib/local";
 import {
   type MemoryDraft,
   type MemoryHit,
@@ -66,6 +70,8 @@ const OWNERS_MS = 5 * 60_000;
 const DUPLICATE_SIMILARITY = 0.92;
 /** Where a login lives when the CLI is too old to list its contexts. */
 const DEFAULT_ORIGIN = "https://app.lobu.ai";
+/** The CLI's built-in context for Lobu Cloud. */
+const CLOUD_CONTEXT = "lobu";
 const SETUP_HINT = "Connect Lobu from the card on bb's New thread screen, or under Settings → Plugins → Lobu.";
 
 const LEARN_PROMPT =
@@ -82,7 +88,8 @@ export default async function plugin(bb: BbPluginApi) {
     login: {
       type: "string",
       label: "Lobu login",
-      description: "The lobu CLI context bb saves and searches through. Leave empty to follow the CLI's active context. Pick one in the Lobu account section.",
+      description:
+        "The lobu CLI context bb saves and searches through: lobu for Lobu Cloud, local for Lobu on this machine. Leave empty to follow the CLI's active context. Pick one in the Lobu account section.",
       default: "",
     },
     lobuBin: {
@@ -137,7 +144,7 @@ export default async function plugin(bb: BbPluginApi) {
     const listed = await api.cliContexts();
     const entry = listed?.find((c) => (chosen === "" ? c.current : c.name === chosen));
     const context = chosen === "" ? (entry?.name ?? null) : chosen;
-    const origin = entry?.origin ?? DEFAULT_ORIGIN;
+    const origin = entry?.origin ?? (context === LOCAL_CONTEXT ? `http://localhost:${localPort(null)}` : DEFAULT_ORIGIN);
     useApi(origin, apiBin);
     return { context, origin };
   }
@@ -146,6 +153,40 @@ export default async function plugin(bb: BbPluginApi) {
     useApi(apiOrigin, next.lobuBin.trim());
     reach = null;
   });
+
+  // ---- Lobu on this machine. Like the Mac app, bb uses a local Lobu that is
+  // already serving, starts its own otherwise, and stops what it started when
+  // the plugin stops.
+  const folders = localFolders(homedir());
+  let localChild: ChildProcess | null = null;
+  let localFailure: string | null = null;
+  async function localOrigin(): Promise<string> {
+    const entry = (await api.cliContexts())?.find((c) => c.name === LOCAL_CONTEXT);
+    return `http://localhost:${localPort(entry?.origin ?? null)}`;
+  }
+  async function ensureLocal(): Promise<void> {
+    if (localChild !== null) return;
+    const origin = await localOrigin();
+    if (await isServing(origin)) return;
+    localFailure = null;
+    const child = await startLocal(api, folders, localPort(origin));
+    localChild = child;
+    const stopped = (why: string) => {
+      if (localChild !== child) return;
+      localChild = null;
+      localFailure = [`Lobu on this machine stopped (${why}).`, lastLogLine(folders)].filter((part) => part !== "").join(" ");
+      reach = null;
+    };
+    child.on("error", (cause) => stopped(cause.message));
+    child.on("exit", (code, signal) => stopped(signal ?? `exit ${String(code)}`));
+  }
+  bb.onDispose(() => {
+    localChild?.kill("SIGTERM");
+  });
+  // Back on after a restart, the way the Mac app starts its Lobu at launch.
+  if ((await settings.get()).login.trim() === LOCAL_CONTEXT && hasProject(folders)) {
+    void ensureLocal().catch((cause: unknown) => bb.log.warn(`Lobu on this machine did not start: ${String(cause)}`));
+  }
 
   // ---- Memory loop state. The in-process copy is the source of truth; every
   // change is written through to plugin storage in order.
@@ -598,17 +639,25 @@ export default async function plugin(bb: BbPluginApi) {
     setupStatus: async () => {
       const cli = await api.cliState();
       const installer = await api.installer();
-      const base = { cli, installCommand: installer?.command ?? null, manualCommand: FALLBACK_INSTALL, logins: [], login: null };
+      const starting = localChild !== null;
+      const base = { cli, installCommand: installer?.command ?? null, manualCommand: FALLBACK_INSTALL, logins: [], login: null, starting };
       if (cli.state === "missing" || cli.state === "broken") return base;
       const logins = (await api.cliContexts()) ?? [];
       const { context, origin } = await resolveLogin();
+      const signedOut = { context, origin, account: null, personal: null };
+      // Asking the CLI about a local Lobu that is down would only sign in again later.
+      if (context === LOCAL_CONTEXT && !(await isServing(origin))) {
+        const problem = starting ? "Lobu on this machine is starting." : (localFailure ?? "Lobu on this machine is not running.");
+        return { ...base, logins, login: { ...signedOut, problem } };
+      }
       try {
         const { account, workspaces } = await api.identity(context);
         const personal = workspaces.find((w) => w.personal)?.slug ?? null;
-        return { ...base, logins, login: { context, origin, account, personal, problem: null } };
+        const problem = workspaces.length === 0 ? `bb could not list your workspaces on ${new URL(origin).host}.` : null;
+        return { ...base, logins, login: { context, origin, account, personal, problem } };
       } catch (cause) {
         const problem = cause instanceof Error ? cause.message : String(cause);
-        return { ...base, logins, login: { context, origin, account: null, personal: null, problem } };
+        return { ...base, logins, login: { ...signedOut, problem } };
       }
     },
     installCli: async () => {
@@ -624,10 +673,21 @@ export default async function plugin(bb: BbPluginApi) {
       if (after.state === "broken") return { error: after.detail };
       return { error: `The install left lobu ${after.version}; bb needs ${CLI_MAJOR} or newer.` };
     },
-    signIn: async () => {
-      const { context } = await resolveLogin();
+    useCloud: async () => {
+      await settings.experimental_set({ login: CLOUD_CONTEXT });
       reach = null;
-      return { approvalUrl: await api.signIn(context) };
+      const signedIn = (await api.cliContexts())?.some((c) => c.name === CLOUD_CONTEXT && c.loggedIn) ?? false;
+      return { approvalUrl: signedIn ? null : await api.signIn(CLOUD_CONTEXT) };
+    },
+    useLocal: async () => {
+      try {
+        await ensureLocal();
+      } catch (cause) {
+        return { error: cause instanceof Error ? cause.message : String(cause) };
+      }
+      await settings.experimental_set({ login: LOCAL_CONTEXT });
+      reach = null;
+      return { error: null };
     },
     addLogin: async ({ name, url }) => {
       const origin = lobuOrigin(url);

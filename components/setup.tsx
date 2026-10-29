@@ -1,5 +1,5 @@
-// Connecting bb to Lobu: install the CLI, sign in, and pick the login bb
-// saves through. The New thread screen shows it as a card until bb is
+// Connecting bb to Lobu, like the Lobu Mac app: install the CLI, then sign in
+// to Lobu Cloud or run Lobu on this machine, and pick the login bb saves through. The New thread screen shows it as a card until bb is
 // connected; the plugin's settings page always shows it.
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
@@ -156,39 +156,61 @@ function InstallStep({ status, reload }: { status: SetupStatus; reload: () => Pr
   );
 }
 
-function SignInStep({ status, reload }: { status: SetupStatus; reload: () => Promise<SetupStatus | null> }) {
+/** Like the Lobu Mac app: sign in to Lobu Cloud, or run Lobu on this machine. */
+function ChooseStep({ status, reload }: { status: SetupStatus; reload: () => Promise<SetupStatus | null> }) {
   const rpc = useRpc<typeof rpcContract>();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { approval, wait } = useApprovalWait(reload, isConnected, () => undefined);
-  const login = status.login;
-  const where = login === null ? "Lobu" : host(login.origin);
-  if (approval !== null) return <Approval url={approval.url} what={`the sign-in to ${where}`} />;
-  const signIn = () => {
+  const starting = useCallback((s: SetupStatus) => isConnected(s) || !s.starting, []);
+  const local = useApprovalWait(reload, starting, () => undefined);
+  if (approval !== null) return <Approval url={approval.url} what="the sign-in to Lobu Cloud" />;
+  if (local.approval !== null) {
+    return <p className="text-xs text-muted-foreground">Starting Lobu on this machine. The first start takes about a minute.</p>;
+  }
+  const act = (call: () => Promise<void>) => {
     setBusy(true);
     setError(null);
-    rpc
-      .call("signIn", {})
-      .then(
-        ({ approvalUrl }) => wait(approvalUrl),
-        (cause: unknown) => setError(errorText(cause)),
-      )
+    call()
+      .catch((cause: unknown) => setError(errorText(cause)))
       .finally(() => setBusy(false));
   };
+  // Either may already be ready: a signed-in Cloud login, or a local Lobu that is serving.
+  const connectedNow = async () => {
+    const next = await reload();
+    return next !== null && isConnected(next);
+  };
+  const useCloud = () =>
+    act(async () => {
+      const { approvalUrl } = await rpc.call("useCloud", {});
+      if (!(await connectedNow())) wait(approvalUrl);
+    });
+  const useLocal = () =>
+    act(async () => {
+      const { error: failure } = await rpc.call("useLocal", {});
+      if (failure !== null) setError(failure);
+      else if (!(await connectedNow())) local.wait(null);
+    });
+  const problem = error ?? status.login?.problem ?? null;
   return (
-    <div className="space-y-2 text-sm">
-      <p className="text-muted-foreground">
-        Sign in to {where}
-        {login?.context ? ` (lobu context ${login.context})` : ""}. New to Lobu? You can create an account on the same page.
-      </p>
-      <Button size="sm" disabled={busy} onClick={signIn}>
-        Sign in to Lobu
-      </Button>
-      {error === null ? null : (
+    <div className="space-y-3 text-sm">
+      {problem === null ? null : (
         <p role="alert" className="text-xs text-destructive">
-          {error}
+          {problem}
         </p>
       )}
+      <div className="space-y-1">
+        <Button size="sm" disabled={busy} onClick={useCloud}>
+          Use Lobu Cloud
+        </Button>
+        <p className="text-xs text-muted-foreground">Sign in at app.lobu.ai. New to Lobu? You can create an account on the same page.</p>
+      </div>
+      <div className="space-y-1">
+        <Button size="sm" variant="outline" disabled={busy} onClick={useLocal}>
+          Run Lobu on this machine
+        </Button>
+        <p className="text-xs text-muted-foreground">Your memory stays on this computer, and Lobu runs while bb does.</p>
+      </div>
     </div>
   );
 }
@@ -297,7 +319,7 @@ function Connected({ status, reload }: { status: SetupStatus; reload: () => Prom
 
 function Steps({ status, reload }: { status: SetupStatus; reload: () => Promise<SetupStatus | null> }) {
   if (status.cli.state !== "ready") return <InstallStep status={status} reload={reload} />;
-  if (!isConnected(status)) return <SignInStep status={status} reload={reload} />;
+  if (!isConnected(status)) return <ChooseStep status={status} reload={reload} />;
   return <Connected status={status} reload={reload} />;
 }
 

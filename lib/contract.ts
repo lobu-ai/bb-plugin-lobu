@@ -35,6 +35,8 @@ const setupStatusSchema = z.object({
       problem: z.string().nullable(),
     })
     .nullable(),
+  /** bb started Lobu on this machine and it has not stopped. */
+  starting: z.boolean(),
 });
 export type SetupStatus = z.infer<typeof setupStatusSchema>;
 
@@ -51,10 +53,15 @@ export const rpcContract = defineRpcContract({
     input: z.object({}),
     output: z.object({ error: z.string().nullable() }),
   },
-  /** Starts `lobu login` for the login bb uses; the page waits for `setupStatus` to show it signed in. */
-  signIn: {
+  /** Uses Lobu Cloud and starts its `lobu login`; the page waits for `setupStatus` to show it signed in. */
+  useCloud: {
     input: z.object({}),
     output: approvalSchema,
+  },
+  /** Uses Lobu on this machine, starting it when it is not running. `error` says why it cannot start. */
+  useLocal: {
+    input: z.object({}),
+    output: z.object({ error: z.string().nullable() }),
   },
   /** Adds a CLI context and starts its login. */
   addLogin: {
