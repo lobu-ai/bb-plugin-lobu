@@ -63,6 +63,13 @@ a box to add a note every new thread should know, and the exact brief its
 threads start with. Undo hides the memory with Lobu's own delete, which keeps
 it recoverable in Lobu. To move or edit a memory, open it in Lobu.
 
+Before a thread exists, bb's New thread screen shows the same brief for the
+project picked in the composer: one line saying what a new thread there will
+start with, which opens the same project controls. Threads started with
+"Don't work in a project" share bb's Personal project brief.
+
+![The New thread screen's Lobu memory line for the project picked in the composer](docs/screenshots/new-thread-memory.jpg)
+
 To see everything bb saved, choose **See everything bb saved in Lobu** in the
 panel, or **Open what bb saved in Lobu** in the thread's ⋯ menu. Both open
 Lobu's events page filtered to those memories, in bb's browser or yours,

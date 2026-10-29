@@ -124,5 +124,12 @@ export const threadMemorySchema = z.object({
 });
 export type ThreadMemory = z.infer<typeof threadMemorySchema>;
 
+export const projectMemoryViewSchema = z.object({
+  personal: z.string().nullable(),
+  workspaces: z.array(workspaceOptionSchema),
+  project: projectMemorySchema,
+});
+export type ProjectMemoryView = z.infer<typeof projectMemoryViewSchema>;
+
 /** What the page sends to pin something; pinnedAt is stamped by the server. */
 export const pinInputSchema = pinnedMemorySchema.omit({ pinnedAt: true });

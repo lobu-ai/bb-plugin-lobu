@@ -9,6 +9,7 @@ import type {
   MemoryKind,
   PinnedMemory,
   ProjectMemory,
+  ProjectMemoryView,
   SavedRecord,
   ThreadMemory,
 } from "@/lib/memory-contract";
@@ -410,6 +411,40 @@ function ProjectContext({
         )}
       </details>
     </div>
+  );
+}
+
+/**
+ * The New thread screen's view of the project in view: a line saying what a
+ * new thread there starts with, opening the same controls as the thread panel.
+ */
+export function ProjectBrief({ projectId }: { projectId: string }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [view, setView] = useState<ProjectMemoryView | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    setView(null);
+    rpc.call("projectMemory", { projectId }).then(setView, () => setView(null));
+  }, [rpc, projectId]);
+  if (view === null) return null;
+  const { project } = view;
+  const parts = [
+    project.pins.length === 0 ? null : `${project.pins.length} pinned`,
+    project.learned === 0 ? null : `${project.learned} learned in earlier threads`,
+  ].filter((part) => part !== null);
+  return (
+    <section className="space-y-1 rounded-lg border border-border px-4 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">
+          New threads in <span className="text-foreground">{project.name}</span> start with{" "}
+          {parts.length === 0 ? "nothing yet" : parts.join(" and ")}.
+        </p>
+        <Button variant="ghost" size="sm" onClick={() => setOpen((shown) => !shown)}>
+          {open ? "Hide" : parts.length === 0 ? "Add a note" : "Show"}
+        </Button>
+      </div>
+      {open ? <ProjectContext project={project} workspaces={view.workspaces} onProject={(next) => setView({ ...view, project: next })} /> : null}
+    </section>
   );
 }
 

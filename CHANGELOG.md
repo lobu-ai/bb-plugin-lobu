@@ -16,6 +16,12 @@
 - Removed the `baseUrl`, `hiddenWorkspaces`, `lobuBin`, `recapProvider`, and
   `recapModel` settings. The CLI is found on its own, and recaps use the
   archived thread's provider.
+- The New thread screen shows what a new thread in the project picked in the
+  composer starts with, and opens the project's pins, notes, and linked
+  workspace. A pinned memory leads the brief once instead of also appearing
+  among what was learned.
+- Requests to a Lobu on this machine wait up to two minutes, since a new
+  local Lobu loads its search model on the first search.
 - **Open what bb saved in Lobu**, in the thread's ⋯ menu and the Lobu memory
   panel, opens Lobu's events page filtered to the memories bb saved.
 - Removed the Lobu sidebar page: the Needs you dashboard (approvals, failed

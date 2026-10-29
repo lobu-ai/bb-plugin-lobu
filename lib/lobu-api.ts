@@ -6,6 +6,8 @@ import { cliFailure, createCliRunner, LobuSetupError } from "./cli";
 /** How long a `lobu whoami` session is reused before asking the CLI again. */
 const SESSION_TTL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+/** A new Lobu on this machine loads its search model on the first search, which takes longer. */
+const LOCAL_REQUEST_TIMEOUT_MS = 120_000;
 
 export interface Workspace {
   slug: string;
@@ -107,12 +109,13 @@ export function parseCliContexts(listed: unknown): CliContext[] {
     .sort((a, b) => Number(b.current) - Number(a.current));
 }
 
+const isLoopback = (url: URL) => ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+
 /** Lobu origins the plugin talks to: HTTPS, or HTTP on this machine. */
 export function lobuOrigin(url: string): string | null {
   try {
     const parsed = new URL(url);
-    const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
-    return parsed.protocol === "https:" || (parsed.protocol === "http:" && loopback) ? parsed.origin : null;
+    return parsed.protocol === "https:" || (parsed.protocol === "http:" && isLoopback(parsed)) ? parsed.origin : null;
   } catch {
     return null;
   }
@@ -120,6 +123,7 @@ export function lobuOrigin(url: string): string | null {
 
 export function createLobuApi({ baseUrl }: LobuApiOptions) {
   const cli = createCliRunner();
+  const timeoutMs = isLoopback(new URL(baseUrl)) ? LOCAL_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
   const runLobu = cli.run;
   const sessions = new Map<string, { session: Session; at: number }>();
   const contextLabel = (context: string | null) => context ?? "the active context";
@@ -155,7 +159,7 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
           "Content-Type": "application/json",
         },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (response.status === 401 && !fresh) continue;
       if (response.status === 401) {

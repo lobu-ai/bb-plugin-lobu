@@ -177,7 +177,8 @@ export default async function plugin(bb: BbPluginApi) {
 
   const projectNames = new Map<string, string>();
   async function refreshProjects(): Promise<void> {
-    const projects = await bb.sdk.projects.list();
+    // The personal project holds threads started with "Don't work in a project".
+    const projects = await bb.sdk.projects.list({ includePersonal: true });
     projectNames.clear();
     for (const project of projects) projectNames.set(project.id, project.name);
   }
@@ -217,7 +218,9 @@ export default async function plugin(bb: BbPluginApi) {
     const name = projectNames.get(projectId) ?? "this project";
     const workspace = memory.links[projectId] ?? null;
     const pins = memory.pins[projectId] ?? [];
-    const learned = learnedFor(projectId, memory.saved);
+    // A pinned memory leads the brief once, not again among what was learned.
+    const pinned = new Set(pins.map((pin) => pin.eventId));
+    const learned = learnedFor(projectId, memory.saved).filter((record) => !pinned.has(record.eventId));
     return { name, workspace, pins, learned, brief: briefFor({ projectName: name, linkedWorkspace: workspace, pins, learned }) };
   }
 
@@ -682,6 +685,10 @@ export default async function plugin(bb: BbPluginApi) {
     learn: async ({ threadId }) => {
       await bb.sdk.threads.send({ threadId, mode: "queue-if-active", input: [{ type: "text", text: LEARN_PROMPT, mentions: [] }] });
       return { sent: true };
+    },
+    projectMemory: async ({ projectId }) => {
+      if (!projectNames.has(projectId)) await refreshProjects().catch(() => undefined);
+      return { ...(await workspaceOptions()), project: projectView(projectId) };
     },
     threadMemory: async ({ threadId }) => {
       const projectId = await projectOfThread(threadId);

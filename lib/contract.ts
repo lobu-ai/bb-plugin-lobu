@@ -3,6 +3,7 @@ import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
   learnResultSchema,
+  projectMemoryViewSchema,
   pinInputSchema,
   projectMemorySchema,
   rememberResultSchema,
@@ -80,6 +81,11 @@ export const rpcContract = defineRpcContract({
   learn: {
     input: z.object({ threadId: z.string() }),
     output: learnResultSchema,
+  },
+  /** A project's Lobu memory: what a new thread there starts with, and the workspaces it can link. */
+  projectMemory: {
+    input: z.object({ projectId: z.string() }),
+    output: projectMemoryViewSchema,
   },
   /** What one thread was given at its start, searched for, and saved. */
   threadMemory: {

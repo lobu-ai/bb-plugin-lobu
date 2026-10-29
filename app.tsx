@@ -6,7 +6,8 @@ import {
   type PluginBrowserBbSdk,
   useSdk,
 } from "@get-bb/plugin-sdk/app";
-import { SetupCard, SetupSettings } from "@/components/setup";
+import { LobuHome } from "@/components/home";
+import { SetupSettings } from "@/components/setup";
 import { ThreadMemoryPanel } from "@/components/memory";
 import { RememberFormView } from "@/components/remember-form";
 import { z } from "zod";
@@ -30,9 +31,9 @@ async function openReview(threadId: string, text: string) {
 }
 
 export default definePluginApp((app) => {
-  // Setup: a card on the New thread screen until bb is connected, and an
-  // account section on the plugin's settings page.
-  app.slots.homepageSection({ id: "connect", title: "Lobu", component: SetupCard });
+  // The New thread screen: setup until bb is connected, then what a new
+  // thread in the project starts with. Settings: the Lobu account.
+  app.slots.homepageSection({ id: "lobu", title: "Lobu memory", component: LobuHome });
   app.slots.settingsSection({
     id: "account",
     title: "Lobu account",

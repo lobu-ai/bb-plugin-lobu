@@ -273,6 +273,18 @@ describe("the memory loop", () => {
     lobu.nextId = 5000;
     expect(repeated.pins).toHaveLength(1);
 
+    // The New thread screen shows the project in view as a new thread there receives it.
+    const home = (await rpc.projectMemory!({ projectId: "proj-1" })) as {
+      personal: string;
+      project: { name: string; workspace: string; pins: unknown[]; learned: number; brief: string };
+    };
+    expect(home.personal).toBe("me");
+    expect(home.project).toMatchObject({ name: "Acme app", workspace: "team", learned: 2 });
+    expect(home.project.pins).toHaveLength(1);
+    expect(home.project.brief).toBe(project.brief);
+    // A pinned note leads the brief once, not again among what was learned.
+    expect(home.project.brief.split("Release notes go in CHANGELOG.md")).toHaveLength(2);
+
     // Undo hides the memory in Lobu and drops it from the plugin's list.
     const preference = afterSearch.saved.find((r) => r.title === prPreference.title)!;
     await rpc.undoMemory!({ eventId: preference.eventId });

@@ -344,12 +344,10 @@ function Frame({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-/** The New thread screen's card; gone once bb is connected. */
-export function SetupCard() {
-  const { status, reload } = useSetupStatus();
-  if (status === null || isConnected(status)) return null;
+/** The New thread screen's setup card, shown until bb is connected. */
+export function SetupCard({ status, reload }: { status: SetupStatus; reload: () => Promise<SetupStatus | null> }) {
   return (
-    <Frame title="Connect Lobu memory">
+    <Frame title="Connect Lobu">
       <p className="text-xs text-muted-foreground">
         Agents in bb save what they learn to Lobu and start each thread with it.
       </p>
