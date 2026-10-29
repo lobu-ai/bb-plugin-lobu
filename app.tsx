@@ -42,7 +42,7 @@ export default definePluginApp((app) => {
     component: NeedsYouStrip,
   });
 
-  // What this thread started with, looked up, and saved, with undo, move, and pin.
+  // What this thread started with, looked up, and saved, with undo and pin.
   app.slots.threadPanelAction({
     id: "memory",
     title: "Lobu memory",

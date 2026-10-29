@@ -24,7 +24,6 @@ import {
   describeOutcome,
   draftFromText,
   idempotencyKey,
-  matchWorkspaceHint,
   outcomeForAgent,
   pickWorkspaceWithHints,
   type SaveOutcome,
@@ -46,7 +45,6 @@ import {
   PINS_KEY,
   SAVED_KEY,
   THREAD_LOGS_KEY,
-  weekStats,
 } from "./lib/memory-store";
 import { buildSnapshot, discoverWorkspaces, parseList, type WorkspaceOwner } from "./lib/snapshot";
 import {
@@ -312,7 +310,6 @@ export default async function plugin(bb: BbPluginApi) {
           semantic_type: draft.kind,
           idempotency_key: idempotencyKey(threadId, personal.slug, draft),
         });
-        const hint = matchWorkspaceHint(owners, draft.workspace);
         outcome.saved.push({
           eventId: saved.id,
           workspace: personal.slug,
@@ -325,7 +322,6 @@ export default async function plugin(bb: BbPluginApi) {
           savedAt: Date.now(),
           uses: 0,
           lastUsedAt: null,
-          suggestedWorkspace: hint !== null && hint !== personal.slug ? hint : null,
         });
       } catch (cause) {
         outcome.failed.push({ title: draft.title, error: cause instanceof Error ? cause.message : String(cause) });
@@ -419,7 +415,6 @@ export default async function plugin(bb: BbPluginApi) {
             savedAt: now,
             uses: 0,
             lastUsedAt: null,
-            suggestedWorkspace: null,
           },
         ];
       }),
@@ -653,28 +648,12 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
-  function savedRecord(eventId: number): SavedRecord {
-    const record = memory.saved.find((r) => r.eventId === eventId);
-    if (record === undefined) throw new Error("This memory is no longer in the plugin's list. Manage it in Lobu.");
-    return record;
-  }
-
-  function replacePinned(eventId: number, next: { eventId: number; workspace: string; url: string | null } | null) {
-    let changed = false;
-    const pins = Object.fromEntries(
-      Object.entries(memory.pins).map(([project, list]) => [
-        project,
-        list.flatMap((pin) => {
-          if (pin.eventId !== eventId) return [pin];
-          changed = true;
-          return next === null ? [] : [{ ...pin, ...next }];
-        }),
-      ]),
+  function unpinEverywhere(eventId: number) {
+    if (!Object.values(memory.pins).some((list) => list.some((pin) => pin.eventId === eventId))) return;
+    memory.pins = Object.fromEntries(
+      Object.entries(memory.pins).map(([project, list]) => [project, list.filter((pin) => pin.eventId !== eventId)]),
     );
-    if (changed) {
-      memory.pins = pins;
-      void persist(PINS_KEY, memory.pins);
-    }
+    void persist(PINS_KEY, memory.pins);
   }
 
   async function workspaceOptions() {
@@ -741,7 +720,6 @@ export default async function plugin(bb: BbPluginApi) {
         ...(await workspaceOptions()),
         saved: memory.saved.slice(0, 60),
         projects,
-        stats: weekStats(memory.saved, Date.now()),
       };
     },
     threadMemory: async ({ threadId }) => {
@@ -755,31 +733,14 @@ export default async function plugin(bb: BbPluginApi) {
       };
     },
     undoMemory: async ({ eventId }) => {
-      const record = savedRecord(eventId);
+      const record = memory.saved.find((r) => r.eventId === eventId);
+      if (record === undefined) throw new Error("This memory is no longer in the plugin's list. Manage it in Lobu.");
       const owners = await memoryOwners();
       await api.deleteMemories(ownerOf(owners, record.workspace).context, record.workspace, [eventId], "Undone from bb");
       memory.saved = memory.saved.filter((r) => r.eventId !== eventId);
       void persist(SAVED_KEY, memory.saved);
-      replacePinned(eventId, null);
+      unpinEverywhere(eventId);
       return { removed: true };
-    },
-    moveMemory: async ({ eventId, workspace }) => {
-      const record = savedRecord(eventId);
-      if (record.workspace === workspace) return record;
-      const owners = await memoryOwners();
-      const { baseUrl } = await apiOptions();
-      const saved = await api.saveMemory(ownerOf(owners, workspace).context, workspace, {
-        title: record.title,
-        content: record.content,
-        semantic_type: record.kind,
-        idempotency_key: idempotencyKey(record.threadId, workspace, record),
-      });
-      await api.deleteMemories(ownerOf(owners, record.workspace).context, record.workspace, [eventId], `Moved to ${workspace} from bb`);
-      const moved: SavedRecord = { ...record, eventId: saved.id, workspace, url: absoluteUrl(saved.viewUrl, baseUrl), suggestedWorkspace: null };
-      memory.saved = memory.saved.map((r) => (r.eventId === eventId ? moved : r));
-      void persist(SAVED_KEY, memory.saved);
-      replacePinned(eventId, { eventId: moved.eventId, workspace, url: moved.url });
-      return moved;
     },
     pinMemory: ({ projectId, item }) => {
       const list = memory.pins[projectId] ?? [];
@@ -823,7 +784,6 @@ export default async function plugin(bb: BbPluginApi) {
           savedAt: Date.now(),
           uses: 0,
           lastUsedAt: null,
-          suggestedWorkspace: null,
         },
       ]);
       // The same note again is the same Lobu memory, so it stays pinned once.
@@ -843,7 +803,6 @@ export default async function plugin(bb: BbPluginApi) {
       void persist(LINKS_KEY, memory.links);
       return projectView(projectId);
     },
-    searchMemory: ({ projectId, query }) => searchLobu(projectId, query, 8),
     dismissPendingReview: ({ id }) =>
       updatePending((list) => ({ list: list.filter((r) => r.id !== id), result: { dismissed: list.some((r) => r.id === id) } })),
   });

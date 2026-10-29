@@ -73,8 +73,6 @@ export const savedRecordSchema = z.object({
   /** Times a lobu_search result returned this memory. */
   uses: z.number(),
   lastUsedAt: z.number().nullable(),
-  /** The workspace the agent thought this belongs in, when not the one it was saved to. */
-  suggestedWorkspace: z.string().nullable(),
 });
 export type SavedRecord = z.infer<typeof savedRecordSchema>;
 
@@ -136,7 +134,6 @@ export const memoryOverviewSchema = z.object({
   workspaces: z.array(workspaceOptionSchema),
   saved: z.array(savedRecordSchema),
   projects: z.array(projectMemorySchema),
-  stats: z.object({ total: z.number(), savedThisWeek: z.number(), found: z.number(), uses: z.number() }),
 });
 export type MemoryOverview = z.infer<typeof memoryOverviewSchema>;
 

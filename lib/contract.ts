@@ -3,14 +3,12 @@ import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
   learnResultSchema,
-  memoryHitSchema,
   memoryOverviewSchema,
   pendingReviewSchema,
   pinInputSchema,
   projectMemorySchema,
   rememberResultSchema,
   rememberSubmissionSchema,
-  savedRecordSchema,
   savedSummarySchema,
   threadMemorySchema,
 } from "./memory-contract";
@@ -130,11 +128,6 @@ export const rpcContract = defineRpcContract({
     input: z.object({ eventId: z.number() }),
     output: z.object({ removed: z.boolean() }),
   },
-  /** Saves a memory to another workspace, then hides the original. */
-  moveMemory: {
-    input: z.object({ eventId: z.number(), workspace: z.string().min(1) }),
-    output: savedRecordSchema,
-  },
   pinMemory: {
     input: z.object({ projectId: z.string(), item: pinInputSchema }),
     output: projectMemorySchema,
@@ -152,10 +145,5 @@ export const rpcContract = defineRpcContract({
   linkProject: {
     input: z.object({ projectId: z.string(), workspace: z.string().min(1).nullable() }),
     output: projectMemorySchema,
-  },
-  /** Searches the personal workspace and the project's linked one. Not counted as an agent use. */
-  searchMemory: {
-    input: z.object({ projectId: z.string().nullable(), query: z.string().trim().min(2).max(300) }),
-    output: z.array(memoryHitSchema),
   },
 });

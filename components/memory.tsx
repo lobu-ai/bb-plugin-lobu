@@ -1,6 +1,6 @@
 // Lobu memory in bb: the Memory tab of the Lobu page and the thread panel.
-// Both show what agents were given, what they looked up, and what they saved,
-// with undo, move, and pin on every saved memory.
+// The panel shows what a thread was given, looked up, and saved; both show the
+// project's pins, note box, and brief through the same component.
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { UrlLink, useRpc } from "@get-bb/plugin-sdk/app";
@@ -95,24 +95,17 @@ function WorkspaceSelect({
   placeholder,
   onChange,
   label,
-  compact = false,
 }: {
   value: string | null;
   workspaces: WorkspaceOption[];
   placeholder: string;
   onChange: (slug: string | null) => void;
   label: string;
-  compact?: boolean;
 }) {
   return (
     <select
       aria-label={label}
-      className={cn(
-        "h-7 shrink-0 cursor-pointer rounded-md bg-transparent text-xs",
-        compact
-          ? "w-20 border border-transparent px-1 text-muted-foreground hover:border-input hover:text-foreground"
-          : "max-w-48 border border-input px-2 text-foreground",
-      )}
+      className="h-7 max-w-48 shrink-0 cursor-pointer rounded-md border border-input bg-transparent px-2 text-xs text-foreground"
       value={value ?? ""}
       onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
     >
@@ -165,21 +158,16 @@ function Status({ error, notice }: { error: string | null; notice: string | null
 function SavedRow({
   record,
   projectName,
-  workspaces,
   busy,
   onUndo,
-  onMove,
   onPin,
 }: {
   record: SavedRecord;
   projectName: string | null;
-  workspaces: WorkspaceOption[];
   busy: boolean;
   onUndo: () => void;
-  onMove: (workspace: string) => void;
   onPin: (() => void) | null;
 }) {
-  const others = workspaces.filter((w) => w.slug !== record.workspace);
   const title = <span className="font-medium">{record.title}</span>;
   return (
     <li className={cn("group flex items-start gap-2 py-3 text-sm", busy && "opacity-50")}>
@@ -211,45 +199,23 @@ function SavedRow({
             </span>
           ) : null}
         </p>
-        {record.suggestedWorkspace === null ? null : (
-          <button
-            type="button"
-            className="rounded-xl border border-dashed border-border px-2 py-0.5 text-left text-xs text-muted-foreground hover:border-foreground/30 hover:text-foreground"
-            onClick={() => onMove(record.suggestedWorkspace as string)}
-            disabled={busy}
-          >
-            The agent thinks this belongs in {record.suggestedWorkspace}. Move it
-          </button>
-        )}
       </div>
       <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
         {onPin === null ? null : <IconAction icon="lobu/pin" label="Pin to this project" onClick={onPin} disabled={busy} />}
-        {others.length === 0 ? null : (
-          <WorkspaceSelect
-            compact
-            label={`Move "${record.title}" to another workspace`}
-            value={null}
-            workspaces={others}
-            placeholder="Move…"
-            onChange={(slug) => slug !== null && onMove(slug)}
-          />
-        )}
         <IconAction icon="lobu/undo" label="Undo: remove from Lobu" onClick={onUndo} disabled={busy} />
       </div>
     </li>
   );
 }
 
-/** Undo, move, and pin for a list of saved memories. */
+/** Undo and pin for a list of saved memories. */
 function SavedList({
   records,
-  workspaces,
   projectNames,
   empty,
   onChanged,
 }: {
   records: SavedRecord[];
-  workspaces: WorkspaceOption[];
   projectNames: Map<string, string>;
   empty: ReactNode;
   onChanged: () => void;
@@ -272,20 +238,12 @@ function SavedList({
               key={record.eventId}
               record={record}
               projectName={record.projectId === null ? null : (projectNames.get(record.projectId) ?? null)}
-              workspaces={workspaces}
               busy={busy === String(record.eventId)}
               onUndo={() =>
                 void run(String(record.eventId), async () => {
                   await rpc.call("undoMemory", { eventId: record.eventId });
                   onChanged();
                   return `Removed "${record.title}". It stays recoverable in Lobu.`;
-                })
-              }
-              onMove={(workspace) =>
-                void run(String(record.eventId), async () => {
-                  await rpc.call("moveMemory", { eventId: record.eventId, workspace });
-                  onChanged();
-                  return `Moved "${record.title}" to ${workspace}.`;
                 })
               }
               onPin={
@@ -335,7 +293,7 @@ function PinRow({ pin, onUnpin, busy }: { pin: PinnedMemory; onUnpin: () => void
   );
 }
 
-function HitRow({ hit, action }: { hit: MemoryHit; action?: ReactNode }) {
+function HitRow({ hit }: { hit: MemoryHit }) {
   return (
     <li className="flex items-start gap-2 py-2 text-sm">
       <div className="min-w-0 flex-1">
@@ -352,12 +310,11 @@ function HitRow({ hit, action }: { hit: MemoryHit; action?: ReactNode }) {
           {hit.similarity === null ? null : ` · ${Math.round(hit.similarity * 100)}% match`}
         </p>
       </div>
-      {action}
     </li>
   );
 }
 
-/** A project's Lobu link, pins, a note box, a search to pin from, and the brief new threads get. */
+/** A project's Lobu link, pins, a note box, and the brief new threads get. */
 function ProjectContext({
   project,
   workspaces,
@@ -370,9 +327,6 @@ function ProjectContext({
   const rpc = useRpc<typeof rpcContract>();
   const { busy, error, notice, run } = useActions();
   const [note, setNote] = useState("");
-  const [query, setQuery] = useState("");
-  const [hits, setHits] = useState<MemoryHit[] | null>(null);
-  const pinned = new Set(project.pins.flatMap((pin) => (pin.eventId === null ? [] : [pin.eventId])));
   return (
     <div className="space-y-3 py-3">
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -442,66 +396,6 @@ function ProjectContext({
         </div>
       </form>
 
-      <form
-        className="space-y-1"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const text = query.trim();
-          if (text.length < 2) return;
-          void run("search", async () => {
-            setHits(await rpc.call("searchMemory", { projectId: project.id, query: text }));
-          });
-        }}
-      >
-        <div className="flex items-center gap-2">
-          <div className="relative min-w-0 flex-1">
-            <Icon name="lobu/search" className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
-              aria-label="Search Lobu memory to pin"
-              className="h-8 w-full rounded-md border border-input bg-transparent pl-8 pr-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              placeholder="Search Lobu memory to pin…"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
-          <Button type="submit" variant="outline" size="sm" disabled={query.trim().length < 2 || busy === "search"}>
-            Search
-          </Button>
-        </div>
-        {hits === null ? null : hits.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No saved memory matches.</p>
-        ) : (
-          <ul className="divide-y divide-border">
-            {hits.map((hit) => (
-              <HitRow
-                key={hit.eventId}
-                hit={hit}
-                action={
-                  pinned.has(hit.eventId) ? (
-                    <span className="shrink-0 pt-1 text-xs text-muted-foreground">Pinned</span>
-                  ) : (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="shrink-0"
-                      onClick={() =>
-                        void run(`pin-${hit.eventId}`, async () => {
-                          const { similarity: _similarity, occurredAt: _occurredAt, ...item } = hit;
-                          onProject(await rpc.call("pinMemory", { projectId: project.id, item }));
-                        })
-                      }
-                    >
-                      <Icon name="lobu/pin" />
-                      Pin
-                    </Button>
-                  )
-                }
-              />
-            ))}
-          </ul>
-        )}
-      </form>
-
       <details className="group rounded-md border border-border">
         <summary className="cursor-pointer select-none px-3 py-2 text-xs text-muted-foreground hover:text-foreground">
           What new threads in {project.name} start with
@@ -516,16 +410,6 @@ function ProjectContext({
           </pre>
         )}
       </details>
-    </div>
-  );
-}
-
-function Stat({ value, label, hint }: { value: string; label: string; hint: string }) {
-  return (
-    <div className="rounded-lg border border-border bg-card px-4 py-3">
-      <p className="text-2xl font-semibold tabular-nums">{value}</p>
-      <p className="text-sm">{label}</p>
-      <p className="text-xs text-muted-foreground">{hint}</p>
     </div>
   );
 }
@@ -602,22 +486,13 @@ export function MemoryTab({ reviews }: { reviews: ReactNode }) {
     );
   }
   const names = new Map(overview.projects.map((p) => [p.id, p.name]));
-  const { stats } = overview;
+  const found = overview.saved.filter((record) => record.uses > 0).length;
   const replaceProject = (project: ProjectMemory) =>
     setOverview((current) =>
       current === null ? current : { ...current, projects: current.projects.map((p) => (p.id === project.id ? project : p)) },
     );
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Stat value={formatCount(stats.total)} label="Memories saved" hint={`${formatCount(stats.savedThisWeek)} this week`} />
-        <Stat
-          value={formatCount(stats.found)}
-          label="Found by agents"
-          hint={stats.total === 0 ? "Searches count once saving starts" : `of ${formatCount(stats.total)} saved`}
-        />
-        <Stat value={formatCount(stats.uses)} label="Times used" hint="lobu_search results" />
-      </div>
       <p className="text-xs text-muted-foreground">
         {overview.autoSave
           ? overview.personal === null
@@ -631,10 +506,13 @@ export function MemoryTab({ reviews }: { reviews: ReactNode }) {
           {error}
         </p>
       )}
-      <Card icon="lobu/memory" title="Recently saved" aside={`${formatCount(overview.saved.length)} shown`}>
+      <Card
+        icon="lobu/memory"
+        title="Recently saved"
+        aside={overview.saved.length === 0 ? undefined : `${formatCount(found)} of ${formatCount(overview.saved.length)} found by agents`}
+      >
         <SavedList
           records={overview.saved}
-          workspaces={overview.workspaces}
           projectNames={names}
           onChanged={load}
           empty="Nothing saved yet. Agents save decisions, gotchas, and standing preferences here as they work."
@@ -761,7 +639,6 @@ export function ThreadMemoryPanel({ threadId }: { threadId: string }) {
       <Card icon="lobu/memory" title="Saved from this thread" aside={data.saved.length === 0 ? undefined : `${data.saved.length}`}>
         <SavedList
           records={data.saved}
-          workspaces={data.workspaces}
           projectNames={names}
           onChanged={load}
           empty="Nothing saved from this thread yet."

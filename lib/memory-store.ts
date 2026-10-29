@@ -27,7 +27,6 @@ const MAX_SEARCHES = 20;
 const BRIEF_BUDGET = 3800;
 const ITEM_CHARS = 320;
 const MAX_LEARNED_IN_BRIEF = 8;
-const WEEK_MS = 7 * 24 * 60 * 60_000;
 
 /** Entries of a stored list that still parse; anything else is dropped. */
 function parseList<T>(schema: z.ZodType<T>, value: unknown): T[] {
@@ -149,17 +148,6 @@ export function briefFor(input: {
       ? "Search the user's Lobu memory with lobu_search for anything else."
       : `Search the user's Lobu memory, including the ${linkedWorkspace} workspace, with lobu_search for anything else.`;
   return { text: [...header, ...lines, "", searchHint].join("\n"), given };
-}
-
-export function weekStats(saved: SavedRecord[], now: number) {
-  const since = now - WEEK_MS;
-  return {
-    total: saved.length,
-    savedThisWeek: saved.filter((record) => record.savedAt >= since).length,
-    /** Saved memories an agent's search has returned at least once. */
-    found: saved.filter((record) => record.uses > 0).length,
-    uses: saved.reduce((sum, record) => sum + record.uses, 0),
-  };
 }
 
 /**

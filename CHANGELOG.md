@@ -10,10 +10,10 @@
   skipping anything Lobu already holds. Turn off **Save memories
   automatically** to review each save in a form instead.
 - A Lobu memory panel in each thread shows what it started with, looked up,
-  and saved, with undo, move, and pin on every saved memory.
-- The Lobu page gains a Memory tab: counts of what was saved and found,
-  recent saves, and every bb project's linked workspace, pins, a note box,
-  a search to pin from, and the exact brief its threads start with.
+  and saved, with undo and pin on every saved memory.
+- The Lobu page gains a Memory tab: recent saves with how often agents found
+  each, and every bb project's linked workspace, pins, a note box, and the
+  exact brief its threads start with.
 
 - The plugin runs the `lobu` CLI with your login shell's `PATH`. bb opened
   from the Dock only sees launchd's minimal `PATH`, so a CLI that needs a

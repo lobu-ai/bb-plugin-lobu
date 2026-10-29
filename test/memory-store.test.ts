@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SavedRecord } from "../lib/memory-contract";
-import { briefFor, countUses, hitsFromSearch, learnedFor, parseSaved, parseThreadLogs, weekStats } from "../lib/memory-store";
+import { briefFor, countUses, hitsFromSearch, learnedFor, parseSaved, parseThreadLogs } from "../lib/memory-store";
 
 const record = (overrides: Partial<SavedRecord>): SavedRecord => ({
   eventId: 1,
@@ -14,7 +14,6 @@ const record = (overrides: Partial<SavedRecord>): SavedRecord => ({
   savedAt: 1_000,
   uses: 0,
   lastUsedAt: null,
-  suggestedWorkspace: null,
   ...overrides,
 });
 
@@ -43,7 +42,6 @@ describe("use counting", () => {
     expect(counted.find((r) => r.eventId === 2)).toMatchObject({ uses: 1, lastUsedAt: 99 });
     expect(learnedFor("proj-1", counted).map((r) => r.eventId)).toEqual([2, 1]);
     expect(countUses(saved, [{ eventId: 42 }], 99)).toBe(saved);
-    expect(weekStats(counted, 100)).toMatchObject({ total: 3, found: 1, uses: 1 });
   });
 });
 

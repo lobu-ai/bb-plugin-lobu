@@ -69,7 +69,7 @@ export function absoluteUrl(viewUrl: string | null, baseUrl: string): string | n
 }
 
 /** Same thread, workspace, and text saves once, even if the form is submitted twice. */
-export function idempotencyKey(threadId: string, workspace: string, memory: Pick<MemoryDraft, "title" | "content">): string {
+export function idempotencyKey(threadId: string, workspace: string, memory: MemoryDraft): string {
   const digest = createHash("sha256").update(`${threadId}\n${workspace}\n${memory.title}\n${memory.content}`).digest("hex");
   return `bb-plugin-lobu:${digest}`;
 }

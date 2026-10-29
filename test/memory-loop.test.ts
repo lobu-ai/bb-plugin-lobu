@@ -185,11 +185,11 @@ const prPreference = {
 };
 
 describe("the memory loop", () => {
-  test("saves, dedupes, briefs, counts uses, links, moves, pins notes, and undoes", async () => {
+  test("saves, dedupes, briefs, counts uses, links, pins notes, and undoes", async () => {
     const { rpc, call, brief } = await startPlugin();
     expect(brief("thread-0")).toBeNull();
 
-    // Auto-save goes to the personal workspace and keeps the agent's workspace hint.
+    // Auto-save goes to the personal workspace.
     const saved = String(await call("lobu_remember", { memories: [deployGotcha, prPreference] }));
     expect(saved).toContain("Saved to the user's personal Lobu workspace (me)");
     expect(lobu.memories.filter((m) => m.workspace === "me")).toHaveLength(2);
@@ -200,11 +200,9 @@ describe("the memory loop", () => {
     expect(lobu.memories).toHaveLength(2);
 
     const overview = (await rpc.memoryOverview!({})) as {
-      saved: { eventId: number; title: string; suggestedWorkspace: string | null; projectId: string | null }[];
-      stats: { total: number; found: number };
+      saved: { eventId: number; title: string; projectId: string | null; uses: number }[];
     };
     expect(overview.saved.map((r) => r.title).sort()).toEqual([deployGotcha.title, prPreference.title].sort());
-    expect(overview.saved.find((r) => r.title === deployGotcha.title)?.suggestedWorkspace).toBe("team");
     expect(overview.saved.every((r) => r.projectId === "proj-1")).toBe(true);
 
     // A new thread in the project starts with what earlier threads learned.
@@ -219,7 +217,7 @@ describe("the memory loop", () => {
     const found = String(await call("lobu_search", { query: "staging deploy vpn" }, "thread-3"));
     expect(found).toContain(deployGotcha.title);
     const afterSearch = (await rpc.memoryOverview!({})) as typeof overview;
-    expect(afterSearch.stats.found).toBe(1);
+    expect(afterSearch.saved.find((r) => r.title === deployGotcha.title)?.uses).toBe(1);
     const thread3 = (await rpc.threadMemory!({ threadId: "thread-3" })) as { log: { searches: { query: string }[] } };
     expect(thread3.log.searches.map((s) => s.query)).toEqual(["staging deploy vpn"]);
 
@@ -228,13 +226,6 @@ describe("the memory loop", () => {
     lobu.searches.length = 0;
     await call("lobu_search", { query: "descriptions" }, "thread-3");
     expect(lobu.searches.map((s) => s.workspace).sort()).toEqual(["me", "team"]);
-
-    // Moving saves to the target and hides the original.
-    const gotcha = afterSearch.saved.find((r) => r.title === deployGotcha.title)!;
-    const moved = (await rpc.moveMemory!({ eventId: gotcha.eventId, workspace: "team" })) as { eventId: number; workspace: string };
-    expect(moved.workspace).toBe("team");
-    expect(lobu.memories.find((m) => m.id === gotcha.eventId)?.deleted).toBe(true);
-    expect(lobu.memories.find((m) => m.id === moved.eventId)?.workspace).toBe("team");
 
     // A note is saved to the personal workspace, pinned, and leads the brief.
     const project = (await rpc.addNote!({ projectId: "proj-1", text: "Release notes go in CHANGELOG.md" })) as {

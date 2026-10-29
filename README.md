@@ -56,17 +56,15 @@ You see all of it in two places:
 
 - **The thread's Lobu memory panel.** Open it from the side panel's new-tab
   menu. It shows what the thread started with, what the agent looked up, and
-  what it saved. Every saved memory can be undone, moved to another
-  workspace, or pinned to the project. When the agent thinks a memory is team
-  knowledge, the panel offers to move it there.
-- **The Memory tab of the Lobu page.** It counts what was saved, how many
-  memories agents have found since, and how often. It lists recent saves
-  with the same actions, and every bb project with its linked workspace, its
-  pins, a box to add a note every new thread should know, a search to pin
-  existing memories, and the exact brief its threads start with.
+  what it saved. Every saved memory can be undone or pinned to the project.
+- **The Memory tab of the Lobu page.** It lists recent saves with the same
+  actions and how often agents have found each one since. It also lists
+  every bb project with its linked workspace, its pins, a box to add a note
+  every new thread should know, and the exact brief its threads start with.
 
-Undo hides the memory with Lobu's own delete, which keeps it recoverable in
-Lobu. Moving saves a copy to the target workspace and hides the original.
+Both places show a project through the same view. Undo hides the memory with
+Lobu's own delete, which keeps it recoverable in Lobu. To move or edit a
+memory, open it in Lobu.
 
 You can still save by hand. Hover any message and choose **Save to Lobu**, or
 highlight part of an answer and pick **Save to Lobu** from the selection
@@ -112,7 +110,7 @@ inside Lobu, so only the rows the page shows come back. Results are cached for
 a minute and the page refreshes every two minutes.
 
 Memory writes use Lobu's own tools: `save_memory` to save, and `run_sdk` with
-`knowledge.delete` to undo or to hide the original after a move. Searches use
+`knowledge.delete` to undo. Searches use
 `search_memory`. What the plugin saved, project links, pins, and each
 thread's log stay in the plugin's bb storage. Recaps read the archived thread through bb's
 own thread API and keep their proposals in the plugin's bb storage until you
