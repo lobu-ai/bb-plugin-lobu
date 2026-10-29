@@ -2,7 +2,7 @@
 // and serves one cached snapshot to the page over RPC. Memory runs as a loop:
 // threads start with their project's Lobu brief, agents search Lobu with
 // lobu_search, and what they learn is saved to the personal workspace (or
-// reviewed in a form first, when auto-save is off). Every save can be undone,
+// reviewed in a form first, when auto-save is off). Every save can be undone
 // or pinned from the thread's Lobu memory panel and the Lobu page.
 import { randomUUID } from "node:crypto";
 import type { BbPluginApi, PluginThreadEventPayloads } from "@get-bb/plugin-sdk";
