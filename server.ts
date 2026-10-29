@@ -125,7 +125,7 @@ export default async function plugin(bb: BbPluginApi) {
       type: "boolean",
       label: "Save memories automatically",
       description:
-        "Agents save what is worth keeping to your personal Lobu workspace without asking. Undo, move, or pin each one from the thread's Lobu memory panel or the Lobu page. Turn this off to review every memory in a form before it is saved.",
+        "Agents save what is worth keeping to your personal Lobu workspace without asking. Undo or pin each one from the thread's Lobu memory panel or the Lobu page. Turn this off to review every memory in a form before it is saved.",
       default: true,
     },
     recapOnArchive: {
