@@ -35,8 +35,8 @@ export function RememberFormView({ interaction, submit, cancel }: PluginPendingI
   return <RememberFields form={parsed.data} onSave={submit} onSkip={cancel} />;
 }
 
-/** Proposed memories to untick, edit, and save; shared by the thread form and the Lobu page. */
-export function RememberFields({
+/** Proposed memories to untick, edit, and save. */
+function RememberFields({
   form,
   onSave,
   onSkip,

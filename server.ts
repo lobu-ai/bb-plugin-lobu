@@ -1,13 +1,12 @@
-// bb-plugin-lobu — server entry. Reads Lobu through the user's `lobu` CLI login
-// and serves one cached snapshot to the page over RPC. Memory runs as a loop:
-// threads start with their project's Lobu brief, agents search Lobu with
-// lobu_search, and what they learn is saved to the personal workspace (or
-// reviewed in a form first, when auto-save is off). Every save can be undone
-// or pinned from the thread's Lobu memory panel and the Lobu page.
-import { randomUUID } from "node:crypto";
+// bb-plugin-lobu — server entry. Talks to Lobu through the user's `lobu` CLI
+// login. Memory runs as a loop: threads start with their project's Lobu brief,
+// agents search Lobu with lobu_search, and what they learn is saved to the
+// personal workspace (or reviewed in a form first, when auto-save is off).
+// Every save can be undone or pinned from the thread's Lobu memory panel, and
+// the Lobu page embeds Lobu's own view of what bb saved.
 import type { BbPluginApi, PluginThreadEventPayloads } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { type MetricPin, metricPinsSchema, rpcContract, type Snapshot } from "./lib/contract";
+import { rpcContract } from "./lib/contract";
 import { createLobuApi, embeddableOrigin } from "./lib/lobu-api";
 import {
   type MemoryDraft,
@@ -46,11 +45,8 @@ import {
   SAVED_KEY,
   THREAD_LOGS_KEY,
 } from "./lib/memory-store";
-import { buildSnapshot, discoverWorkspaces, parseList, type WorkspaceOwner } from "./lib/snapshot";
+import { discoverWorkspaces, parseList, savedEventsPath, type WorkspaceOwner } from "./lib/workspaces";
 import {
-  addPending,
-  livePending,
-  type PendingRecap,
   RECAP_SOURCE_KEY,
   RECAP_TITLE_KEY,
   recapPrompt,
@@ -59,7 +55,6 @@ import {
   worthRecapping,
 } from "./lib/distill";
 
-const CACHE_MS = 60_000;
 /** How long a review form waits before it closes itself. */
 const REVIEW_TIMEOUT_MS = 24 * 60 * 60_000;
 /** How long a recap thread may take before it is stopped. */
@@ -72,15 +67,6 @@ const DUPLICATE_SIMILARITY = 0.92;
 const LEARN_PROMPT =
   "Look back over this thread and call lobu_remember with the learnings worth keeping across sessions: decisions, non-obvious facts or gotchas, and preferences I stated as standing rules. Most threads contain nothing worth keeping; if so, say so instead of calling the tool. Never propose what this thread built or changed, anything the repo or code already states, generic quality wishes, or task requirements restated as preferences. At most three short, self-contained memories, each with a short evidence quote of the turn or finding it came from. Skip anything temporary, obvious from the code, already saved to Lobu, or sensitive.";
 
-function parsePins(value: string): MetricPin[] | null {
-  try {
-    const parsed = metricPinsSchema.safeParse(JSON.parse(value));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
 function trimTrailingSlashes(url: string): string {
   let end = url.length;
   while (end > 0 && url[end - 1] === "/") end -= 1;
@@ -92,22 +78,8 @@ export default async function plugin(bb: BbPluginApi) {
     hiddenWorkspaces: {
       type: "string",
       label: "Hidden workspaces",
-      description: "Comma-separated workspace slugs to leave off the dashboard.",
+      description: "Comma-separated workspace slugs bb never saves to or searches.",
       default: "",
-    },
-    metrics: {
-      type: "string",
-      label: "Pinned metrics",
-      description:
-        'JSON array of metric queries. Example: [{"workspace":"acme","entity_type":"company","measure":"spend","by":["month"],"label":"Spend by month"}]. The Metrics card lists the measures each workspace declares.',
-      experimental_multiline: true,
-      experimental_schema: z
-        .string()
-        .refine(
-          (value) => parsePins(value) !== null,
-          "Use a JSON array of { workspace, entity_type, measure, by?, segment?, label? }",
-        ),
-      default: "[]",
     },
     baseUrl: {
       type: "string",
@@ -125,14 +97,14 @@ export default async function plugin(bb: BbPluginApi) {
       type: "boolean",
       label: "Save memories automatically",
       description:
-        "Agents save what is worth keeping to your personal Lobu workspace without asking. Undo or pin each one from the thread's Lobu memory panel or the Lobu page. Turn this off to review every memory in a form before it is saved.",
+        "Agents save what is worth keeping to your personal Lobu workspace without asking. Undo or pin each one from the thread's Lobu memory panel. Turn this off to review every memory in a form before it is saved.",
       default: true,
     },
     recapOnArchive: {
       type: "boolean",
       label: "Recap archived threads",
       description:
-        "When you archive a thread, a hidden agent reads it and keeps what is worth remembering: saved like any other memory when auto-save is on, otherwise waiting on the Lobu page for your review. Each recap is one agent turn.",
+        "When you archive a thread, a hidden agent reads it and saves what is worth remembering, like any other memory. Needs auto-save on, since nobody reviews an archived thread. Each recap is one agent turn.",
       default: false,
     },
     recapProvider: {
@@ -155,36 +127,14 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   let api = createLobuApi(await apiOptions());
-  let cached: { at: number; snapshot: Snapshot } | null = null;
-  let inFlight: Promise<Snapshot> | null = null;
 
   /** Every CLI login on this Lobu, or the CLI's active context when it cannot list them. */
   async function loginContexts(): Promise<(string | null)[]> {
     return (await api.contexts()) ?? [null];
   }
 
-  async function snapshot(refresh: boolean): Promise<Snapshot> {
-    if (!refresh && cached !== null && Date.now() - cached.at < CACHE_MS) return cached.snapshot;
-    inFlight ??= (async () => {
-      const { hiddenWorkspaces, metrics } = await settings.get();
-      return buildSnapshot(api, {
-        contexts: await loginContexts(),
-        hiddenWorkspaces: new Set(parseList(hiddenWorkspaces)),
-        baseUrl: (await apiOptions()).baseUrl,
-        pins: parsePins(metrics) ?? [],
-        now: Date.now(),
-      });
-    })().finally(() => {
-      inFlight = null;
-    });
-    const next = await inFlight;
-    cached = { at: Date.now(), snapshot: next };
-    return next;
-  }
-
   settings.onChange(async () => {
     api = createLobuApi(await apiOptions());
-    cached = null;
     ownersCache = null;
   });
 
@@ -268,7 +218,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (personal !== null) targets.add(personal.slug);
     const linked = projectId === null ? undefined : memory.links[projectId];
     if (linked !== undefined && owners.has(linked)) targets.add(linked);
-    if (targets.size === 0) throw new Error("No Lobu workspace is available. Open the Lobu page for setup steps.");
+    if (targets.size === 0) throw new Error("No Lobu workspace is available. Check that `lobu login` works in a terminal.");
     const { baseUrl } = await apiOptions();
     // Search returns connector content too; ask for more so enough saved memories remain.
     const fetchLimit = Math.min(limit * 3, 30);
@@ -371,9 +321,9 @@ export default async function plugin(bb: BbPluginApi) {
   /** The review form for these drafts, with the workspaces the user can save to. */
   async function formFor(drafts: MemoryDraft[]): Promise<{ owners: Map<string, WorkspaceOwner>; form: RememberForm }> {
     const { hiddenWorkspaces } = await settings.get();
-    const { owners, setup } = await discoverWorkspaces(api, await loginContexts());
+    const { owners, problem } = await discoverWorkspaces(api, await loginContexts());
     for (const slug of parseList(hiddenWorkspaces)) owners.delete(slug);
-    if (owners.size === 0) throw new Error(setup?.message ?? "No Lobu workspace is available. Open the Lobu page for setup steps.");
+    if (owners.size === 0) throw new Error(problem ?? "No Lobu workspace is available. Check that `lobu login` works in a terminal.");
     const preferred = (await bb.storage.kv.get<string>(PREFERRED_WORKSPACE)) ?? null;
     const picked = pickWorkspaceWithHints(
       owners,
@@ -457,20 +407,6 @@ export default async function plugin(bb: BbPluginApi) {
     return outcome;
   }
 
-  // Recaps of archived threads wait here until the user reviews them on the Lobu page.
-  const PENDING = "pendingRecaps";
-  let pendingLock: Promise<unknown> = Promise.resolve();
-  /** Serializes read-modify-write of the pending list. */
-  function updatePending<T>(change: (list: PendingRecap[]) => { list: PendingRecap[]; result: T }): Promise<T> {
-    const run = pendingLock.then(async () => {
-      const { list, result } = change(livePending(await bb.storage.kv.get(PENDING), Date.now()));
-      await bb.storage.kv.set(PENDING, list);
-      return result;
-    });
-    pendingLock = run.catch(() => undefined);
-    return run;
-  }
-
   /** The archived thread a hidden recap thread is reading, or null for an ordinary thread. */
   async function recapSource(threadId: string): Promise<{ threadId: string; title: string } | null> {
     const metadata = await bb.sdk.threads.getPluginMetadata({ threadId, pluginId: bb.pluginId });
@@ -502,8 +438,8 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   async function recapArchived(thread: PluginThreadEventPayloads["thread.archived"]["thread"]) {
-    const { recapOnArchive, recapProvider, recapModel } = await settings.get();
-    if (!recapOnArchive || thread.visibility !== "visible" || thread.originPluginId === bb.pluginId) return;
+    const { recapOnArchive, autoSave: automatic, recapProvider, recapModel } = await settings.get();
+    if (!recapOnArchive || !automatic || thread.visibility !== "visible" || thread.originPluginId === bb.pluginId) return;
     const transcript = await readTranscript(thread.id);
     if (!worthRecapping(transcript)) {
       bb.log.info(`Lobu recap of ${thread.id} skipped: no conversation to recap`);
@@ -523,25 +459,6 @@ export default async function plugin(bb: BbPluginApi) {
       prompt: recapPrompt(title, transcript.text),
     });
     await finishRecap(worker.id);
-  }
-
-  /** The archived thread's opening user message, for recap triage; null when unreadable. */
-  async function readFirstUserMessage(threadId: string): Promise<string | null> {
-    try {
-      const batch = await bb.sdk.threads.events.list({
-        threadId,
-        types: [...TRANSCRIPT_EVENT_TYPES],
-        order: "asc",
-        limit: "100",
-      });
-      const transcript = transcriptFromEvents([...batch]);
-      const first = transcript.text.split("\n").find((line) => line.startsWith("User: "));
-      if (first === undefined) return null;
-      const text = first.slice("User: ".length).trim();
-      return text === "" ? null : text.slice(0, 200);
-    } catch {
-      return null;
-    }
   }
 
   /** Lets a recap thread finish its turn, then archives it and releases its runtime. */
@@ -589,19 +506,8 @@ export default async function plugin(bb: BbPluginApi) {
           const outcome = await autoSave(source?.threadId ?? threadId, projectId, memories);
           if (outcome !== null) return autoSaveForAgent(outcome);
         }
-        if (source !== null) {
-          const recap = {
-            id: randomUUID(),
-            sourceThreadId: source.threadId,
-            sourceTitle: source.title,
-            createdAt: Date.now(),
-            firstMessage: await readFirstUserMessage(source.threadId),
-            drafts: memories,
-          };
-          await updatePending((list) => ({ list: addPending(list, recap), result: null }));
-          const count = `${memories.length} ${memories.length === 1 ? "memory" : "memories"}`;
-          return `Nothing was saved. ${count} now wait for the user to review on the Lobu page. Reply with exactly: "Queued ${count} for review on the Lobu page."`;
-        }
+        // Nobody reviews a form in a hidden recap thread.
+        if (source !== null) return 'Nothing was saved: auto-save is off or no personal Lobu workspace is reachable. Reply with exactly: "Nothing saved."';
         return outcomeForAgent(await review(threadId, memories, signal));
       } catch (cause) {
         return { content: [{ type: "text", text: cause instanceof Error ? cause.message : String(cause) }], isError: true };
@@ -665,21 +571,30 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   bb.rpc.register(rpcContract, {
-    snapshot: ({ refresh }) => snapshot(refresh),
     lobuContexts: async () => ({
       contexts: (await api.cliContexts()) ?? [],
       fallbackOrigin: embeddableOrigin((await apiOptions()).baseUrl) ?? "",
     }),
     lobuApp: async ({ context }) => {
-      const url =
-        context === null ? (await apiOptions()).baseUrl : (await api.cliContexts())?.find((c) => c.name === context)?.origin;
+      const { baseUrl } = await apiOptions();
+      const url = context === null ? baseUrl : (await api.cliContexts())?.find((c) => c.name === context)?.origin;
       if (url === undefined) throw new Error(`The lobu CLI has no context named ${context}.`);
       const origin = embeddableOrigin(url);
       if (origin === null) throw new Error(`bb only embeds Lobu over HTTPS or on this machine, not ${url}.`);
+      // bb saves only to the Lobu in the plugin's settings.
+      if (origin !== new URL(baseUrl).origin) return { origin, path: null, signInUrl: null };
+      const reachable = new Set((await api.workspaces(context)).map((workspace) => workspace.slug));
+      const path = savedEventsPath(memory.saved, reachable);
+      if (path === null) return { origin, path: null, signInUrl: null };
       const session = await api.webSession(context, origin);
       // The session rides in the fragment, which never reaches a server; Lobu's
       // bootstrap page strips it from history before signing the frame in.
-      return { url: `${origin}/api/extension-bootstrap#token=${encodeURIComponent(session)}`, origin };
+      return { origin, path, signInUrl: `${origin}/api/extension-bootstrap#token=${encodeURIComponent(session)}` };
+    },
+    addContext: async ({ name, url }) => {
+      const origin = embeddableOrigin(url);
+      if (origin === null) throw new Error("Use an HTTPS Lobu URL, or HTTP on this machine.");
+      return { approvalUrl: await api.addContext(name, origin) };
     },
     remember: async ({ threadId, text }) => {
       // The form stays open until the user answers, so do not hold the RPC.
@@ -697,45 +612,6 @@ export default async function plugin(bb: BbPluginApi) {
     learn: async ({ threadId }) => {
       await bb.sdk.threads.send({ threadId, mode: "queue-if-active", input: [{ type: "text", text: LEARN_PROMPT, mentions: [] }] });
       return { sent: true };
-    },
-    pendingReviews: async () => {
-      const recaps = livePending(await bb.storage.kv.get(PENDING), Date.now());
-      if (recaps.length === 0) return [];
-      return Promise.all(
-        recaps.map(async (recap) => ({
-          id: recap.id,
-          sourceTitle: recap.sourceTitle,
-          createdAt: recap.createdAt,
-          firstMessage: recap.firstMessage ?? null,
-          form: (await formFor(recap.drafts)).form,
-        })),
-      );
-    },
-    savePendingReview: async ({ id, submission }) => {
-      const recap = livePending(await bb.storage.kv.get(PENDING), Date.now()).find((r) => r.id === id);
-      if (recap === undefined) throw new Error("This recap is no longer waiting for review.");
-      const { owners } = await formFor(recap.drafts);
-      // Keyed to the archived thread, so saving the same memory again stores it once.
-      const outcome = await save(owners, recap.sourceThreadId, submission);
-      await updatePending((list) => ({ list: list.filter((r) => r.id !== id), result: null }));
-      return describeOutcome(outcome);
-    },
-    memoryOverview: async () => {
-      await refreshProjects().catch((cause: unknown) => bb.log.warn(`Lobu could not list bb projects: ${String(cause)}`));
-      const { autoSave: automatic } = await settings.get();
-      const projects = [...projectNames.keys()]
-        .map(projectView)
-        .sort(
-          (a, b) =>
-            Number(b.workspace !== null || b.pins.length > 0 || b.learned > 0) -
-              Number(a.workspace !== null || a.pins.length > 0 || a.learned > 0) || a.name.localeCompare(b.name),
-        );
-      return {
-        autoSave: automatic,
-        ...(await workspaceOptions()),
-        saved: memory.saved.slice(0, 60),
-        projects,
-      };
     },
     threadMemory: async ({ threadId }) => {
       const projectId = await projectOfThread(threadId);
@@ -776,7 +652,7 @@ export default async function plugin(bb: BbPluginApi) {
     addNote: async ({ projectId, text }) => {
       const owners = await memoryOwners();
       const personal = personalOf(owners);
-      if (personal === null) throw new Error("No personal Lobu workspace is available. Open the Lobu page for setup steps.");
+      if (personal === null) throw new Error("No personal Lobu workspace is available. Check that `lobu login` works in a terminal.");
       const draft = draftFromText(text);
       const { baseUrl } = await apiOptions();
       const saved = await api.saveMemory(personal.owner.context, personal.slug, {
@@ -818,7 +694,5 @@ export default async function plugin(bb: BbPluginApi) {
       void persist(LINKS_KEY, memory.links);
       return projectView(projectId);
     },
-    dismissPendingReview: ({ id }) =>
-      updatePending((list) => ({ list: list.filter((r) => r.id !== id), result: { dismissed: list.some((r) => r.id === id) } })),
   });
 }

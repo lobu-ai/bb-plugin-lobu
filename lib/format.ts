@@ -1,4 +1,4 @@
-// Small display helpers shared by the Lobu page and the thread panel.
+// Small display helpers for the Lobu page and the thread panel.
 
 export function relativeTime(iso: string | null): string | null {
   if (iso === null) return null;

@@ -6,7 +6,7 @@ import {
   type PluginBrowserBbSdk,
   useSdk,
 } from "@get-bb/plugin-sdk/app";
-import { DashboardPage, NeedsYouStrip } from "@/components/dashboard";
+import { LobuApp } from "@/components/lobu-app";
 import { ThreadMemoryPanel } from "@/components/memory";
 import { RememberFormView } from "@/components/remember-form";
 import { learnResultSchema, REMEMBER_RENDERER, rememberResultSchema } from "@/lib/memory-contract";
@@ -29,17 +29,13 @@ async function openReview(threadId: string, text: string) {
 }
 
 export default definePluginApp((app) => {
+  // Lobu's own view of what bb saved, for the CLI login picked at the top.
   app.slots.navPanel({
     id: "dashboard",
     title: "Lobu",
     icon: "lobu/lobu",
     path: "dashboard",
-    component: DashboardPage,
-  });
-  app.slots.homepageSection({
-    id: "needs-you",
-    title: "Lobu",
-    component: NeedsYouStrip,
+    component: LobuApp,
   });
 
   // What this thread started with, looked up, and saved, with undo and pin.

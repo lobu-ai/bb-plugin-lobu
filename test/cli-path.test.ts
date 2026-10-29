@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cliFailure, loginShellPath, mergePath, pathBetweenMarkers } from "../lib/cli";
+import { cliFailure, firstUrl, loginShellPath, mergePath, pathBetweenMarkers } from "../lib/cli";
 import { createLobuApi } from "../lib/lobu-api";
 
 // bb opened from the Dock runs plugins with launchd's PATH, while the CLI's
@@ -119,5 +119,17 @@ describe("classifying a failed CLI run", () => {
     const failure = cliFailure({ code: null, killed: true, signal: "SIGTERM" }, null);
     expect(failure.code).toBe("cli_failed");
     expect(failure.message).toContain("did not answer");
+  });
+});
+
+describe("firstUrl", () => {
+  test("finds the approval URL lobu login prints on its own line", () => {
+    const output = "\n  Open this URL to approve the login:\n  https://lobu.example/oauth/device?user_code=ABCD-EFGH\n  Code: ABCD-EFGH\n";
+    expect(firstUrl(output)).toBe("https://lobu.example/oauth/device?user_code=ABCD-EFGH");
+  });
+
+  test("ignores prose and other schemes", () => {
+    expect(firstUrl("Open this URL to approve the login:\njavascript:alert(1)\n")).toBeNull();
+    expect(firstUrl("")).toBeNull();
   });
 });

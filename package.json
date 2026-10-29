@@ -1,7 +1,7 @@
 {
   "name": "bb-plugin-lobu",
   "version": "0.4.1",
-  "description": "Lobu in bb: approvals waiting on you, failed Automation and feed runs, unhealthy connections and devices, 24-hour activity, and pinned metrics across your Lobu workspaces, plus Save to Lobu for keeping what agents learn in Lobu memory.",
+  "description": "Lobu in bb: save what your agents learn to Lobu memory, start threads with it, and see what bb saved inside Lobu's own app, for any of your lobu CLI logins.",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -18,7 +18,7 @@
   },
   "bb": {
     "name": "Lobu",
-    "description": "See what needs you across your Lobu workspaces, and save what your agents learn to Lobu memory after reviewing it.",
+    "description": "Save what your agents learn to Lobu memory, and see what bb saved in Lobu's app.",
     "branding": {
       "icon": "./icons/lobu.svg",
       "logo": {
@@ -27,11 +27,6 @@
       "experimental_icons": {
         "lobu": "./icons/lobu.svg",
         "refresh": "./icons/refresh.svg",
-        "inbox": "./icons/inbox.svg",
-        "alert": "./icons/alert.svg",
-        "plug": "./icons/plug.svg",
-        "activity": "./icons/activity.svg",
-        "chart": "./icons/chart.svg",
         "pin": "./icons/pin.svg",
         "undo": "./icons/undo.svg",
         "search": "./icons/search.svg",
@@ -47,10 +42,9 @@
     "skills": []
   },
   "scripts": {
-    "generate": "bun scripts/generate-lobu-scripts.ts",
     "typecheck": "tsc --noEmit -p .",
     "test": "bun test",
-    "build": "bun run generate && bb plugin build"
+    "build": "bb plugin build"
   },
   "files": [
     "app.tsx",

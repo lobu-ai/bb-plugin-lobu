@@ -2,9 +2,15 @@
 
 ## Unreleased
 
-- The Lobu page opens on the Lobu web app, signed in with your CLI login,
-  with a picker for your CLI contexts. Lobu must allow bb's address in its
-  `FRAME_ANCESTORS` setting to be framed.
+- The Lobu page is now Lobu's own events page, signed in with your CLI login
+  and filtered to the memories bb saved, with a picker for your CLI contexts
+  and a **New context** button that adds a context and signs it in. Lobu must
+  allow bb's address in its `FRAME_ANCESTORS` setting to be framed.
+- Removed the Needs you dashboard (approvals, failed runs, connections and
+  devices, activity, metrics), its New thread screen summary, and the
+  `metrics` setting. Lobu's own app covers them.
+- Archived-thread recaps save like any other memory and need auto-save on;
+  the review queue on the Lobu page is gone.
 - Memory runs as a loop. New threads start with their project's Lobu brief:
   what you pinned there and what earlier threads learned, most used first.
 - Agents get `lobu_search`, which searches your personal workspace and the
@@ -14,16 +20,13 @@
   automatically** to review each save in a form instead.
 - A Lobu memory panel in each thread shows what it started with, looked up,
   and saved, with undo and pin on every saved memory.
-- The Lobu page gains a Memory tab: recent saves with how often agents found
-  each, and every bb project's linked workspace, pins, a note box, and the
-  exact brief its threads start with.
 
 - The plugin runs the `lobu` CLI with your login shell's `PATH`. bb opened
   from the Dock only sees launchd's minimal `PATH`, so a CLI that needs a
-  Homebrew, nvm, or Bun `node` failed to start and the Lobu page wrongly
+  Homebrew, nvm, or Bun `node` failed to start and the plugin wrongly
   asked you to log in.
-- A CLI that cannot run now gets its own setup step showing the CLI's error,
-  instead of being reported as a missing login.
+- A CLI that cannot run now reports the CLI's own error instead of a missing
+  login.
 
 ## 0.4.1
 

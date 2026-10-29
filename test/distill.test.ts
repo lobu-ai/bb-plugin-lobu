@@ -1,14 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  addPending,
-  livePending,
-  PENDING_MAX,
-  PENDING_TTL_MS,
-  type PendingRecap,
-  recapPrompt,
-  transcriptFromEvents,
-  worthRecapping,
-} from "../lib/distill";
+import { recapPrompt, transcriptFromEvents, worthRecapping } from "../lib/distill";
 
 const userTurn = (text: string) => ({
   type: "client/turn/requested",
@@ -79,30 +70,5 @@ describe("recapPrompt", () => {
     const prompt = recapPrompt("Anything", "User: hi");
     expect(prompt).toContain('"Nothing to keep."');
     expect(prompt).toContain("at most three");
-  });
-});
-
-describe("pending recaps", () => {
-  const recap = (id: string, sourceThreadId: string, createdAt: number): PendingRecap => ({
-    id,
-    sourceThreadId,
-    sourceTitle: "Fix deploys",
-    createdAt,
-    drafts: [{ title: "Staging needs VPN", content: "Staging deploys need the office VPN.", kind: "fact" }],
-  });
-
-  test("drops expired and malformed entries", () => {
-    const now = 10 * PENDING_TTL_MS;
-    expect(livePending([recap("a", "t1", now - PENDING_TTL_MS - 1), recap("b", "t2", now - 1)], now).map((r) => r.id)).toEqual(["b"]);
-    expect(livePending("garbage", now)).toEqual([]);
-    expect(livePending(undefined, now)).toEqual([]);
-  });
-
-  test("replaces an earlier recap of the same thread and caps the list", () => {
-    expect(addPending([recap("a", "t1", 1)], recap("b", "t1", 2)).map((r) => r.id)).toEqual(["b"]);
-    let list: PendingRecap[] = [];
-    for (let i = 0; i < PENDING_MAX + 3; i += 1) list = addPending(list, recap(`r${i}`, `t${i}`, i));
-    expect(list).toHaveLength(PENDING_MAX);
-    expect(list[0]?.id).toBe("r3");
   });
 });

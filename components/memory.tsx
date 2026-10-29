@@ -1,6 +1,5 @@
-// Lobu memory in bb: the Memory tab of the Lobu page and the thread panel.
-// The panel shows what a thread was given, looked up, and saved; both show the
-// project's pins, note box, and brief through the same component.
+// Lobu memory in bb: the thread panel. It shows what a thread was given,
+// looked up, and saved, and the project's pins, note box, and brief.
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { UrlLink, useRpc } from "@get-bb/plugin-sdk/app";
@@ -8,7 +7,6 @@ import type { rpcContract } from "@/lib/contract";
 import type {
   MemoryHit,
   MemoryKind,
-  MemoryOverview,
   PinnedMemory,
   ProjectMemory,
   SavedRecord,
@@ -410,133 +408,6 @@ function ProjectContext({
           </pre>
         )}
       </details>
-    </div>
-  );
-}
-
-function ProjectRow({
-  project,
-  workspaces,
-  open,
-  onToggle,
-  onProject,
-}: {
-  project: ProjectMemory;
-  workspaces: WorkspaceOption[];
-  open: boolean;
-  onToggle: () => void;
-  onProject: (project: ProjectMemory) => void;
-}) {
-  return (
-    <li>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={onToggle}
-        className="flex w-full items-center gap-2 py-2.5 text-left text-sm hover:text-foreground"
-      >
-        <Icon name="lobu/folder" className="size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 truncate font-medium">{project.name}</span>
-        {project.workspace === null ? null : (
-          <span className="shrink-0 rounded-full bg-accent px-2 text-xs text-foreground">{project.workspace}</span>
-        )}
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-          {project.pins.length} pinned · {project.learned} learned
-        </span>
-        <span aria-hidden className={cn("shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}>
-          ›
-        </span>
-      </button>
-      {open ? <ProjectContext project={project} workspaces={workspaces} onProject={onProject} /> : null}
-    </li>
-  );
-}
-
-const OVERVIEW_POLL_MS = 60_000;
-
-/** The Memory tab of the Lobu page. */
-export function MemoryTab({ reviews }: { reviews: ReactNode }) {
-  const rpc = useRpc<typeof rpcContract>();
-  const [overview, setOverview] = useState<MemoryOverview | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [open, setOpen] = useState<string | null>(null);
-  const load = useCallback(() => {
-    rpc.call("memoryOverview", {}).then(
-      (next) => {
-        setOverview(next);
-        setError(null);
-      },
-      (cause: unknown) => setError(errorText(cause)),
-    );
-  }, [rpc]);
-  useEffect(() => {
-    load();
-    const timer = setInterval(load, OVERVIEW_POLL_MS);
-    return () => clearInterval(timer);
-  }, [load]);
-  if (overview === null) {
-    return error === null ? (
-      <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
-        Loading memory…
-      </div>
-    ) : (
-      <p role="alert" className="text-sm text-destructive">
-        {error}
-      </p>
-    );
-  }
-  const names = new Map(overview.projects.map((p) => [p.id, p.name]));
-  const found = overview.saved.filter((record) => record.uses > 0).length;
-  const replaceProject = (project: ProjectMemory) =>
-    setOverview((current) =>
-      current === null ? current : { ...current, projects: current.projects.map((p) => (p.id === project.id ? project : p)) },
-    );
-  return (
-    <div className="space-y-4">
-      <p className="text-xs text-muted-foreground">
-        {overview.autoSave
-          ? overview.personal === null
-            ? "Auto-save is on, but none of your logins has a personal workspace, so agents ask before saving."
-            : `Auto-save is on: agents save what they learn to ${overview.personal}. Undo anything below.`
-          : "Auto-save is off: agents ask before saving."}{" "}
-        Change it in this plugin's settings.
-      </p>
-      {error === null ? null : (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      <Card
-        icon="lobu/memory"
-        title="Recently saved"
-        aside={overview.saved.length === 0 ? undefined : `${formatCount(found)} of ${formatCount(overview.saved.length)} found by agents`}
-      >
-        <SavedList
-          records={overview.saved}
-          projectNames={names}
-          onChanged={load}
-          empty="Nothing saved yet. Agents save decisions, gotchas, and standing preferences here as they work."
-        />
-      </Card>
-      <Card icon="lobu/folder" title="Projects" aside="what each project's threads start with">
-        {overview.projects.length === 0 ? (
-          <Empty>No bb projects yet.</Empty>
-        ) : (
-          <ul className="divide-y divide-border">
-            {overview.projects.map((project) => (
-              <ProjectRow
-                key={project.id}
-                project={project}
-                workspaces={overview.workspaces}
-                open={open === project.id}
-                onToggle={() => setOpen((current) => (current === project.id ? null : project.id))}
-                onProject={replaceProject}
-              />
-            ))}
-          </ul>
-        )}
-      </Card>
-      {reviews}
     </div>
   );
 }

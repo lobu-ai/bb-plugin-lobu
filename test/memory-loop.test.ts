@@ -116,7 +116,6 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
   const formRequests: unknown[] = [];
   const values = {
     hiddenWorkspaces: "",
-    metrics: "[]",
     baseUrl: `http://localhost:${server.port}`,
     lobuBin: join(root, "lobu"),
     autoSave: true,
@@ -199,9 +198,11 @@ describe("the memory loop", () => {
     expect(again).toContain("Already in Lobu, so not saved again");
     expect(lobu.memories).toHaveLength(2);
 
-    const overview = (await rpc.memoryOverview!({})) as {
-      saved: { eventId: number; title: string; projectId: string | null; uses: number }[];
-    };
+    const savedIn = async (threadId: string) =>
+      ((await rpc.threadMemory!({ threadId })) as {
+        saved: { eventId: number; title: string; projectId: string | null; uses: number }[];
+      }).saved;
+    const overview = { saved: await savedIn("thread-1") };
     expect(overview.saved.map((r) => r.title).sort()).toEqual([deployGotcha.title, prPreference.title].sort());
     expect(overview.saved.every((r) => r.projectId === "proj-1")).toBe(true);
 
@@ -216,7 +217,7 @@ describe("the memory loop", () => {
     // An agent search is logged on the thread and counted as a use.
     const found = String(await call("lobu_search", { query: "staging deploy vpn" }, "thread-3"));
     expect(found).toContain(deployGotcha.title);
-    const afterSearch = (await rpc.memoryOverview!({})) as typeof overview;
+    const afterSearch = { saved: await savedIn("thread-1") };
     expect(afterSearch.saved.find((r) => r.title === deployGotcha.title)?.uses).toBe(1);
     const thread3 = (await rpc.threadMemory!({ threadId: "thread-3" })) as { log: { searches: { query: string }[] } };
     expect(thread3.log.searches.map((s) => s.query)).toEqual(["staging deploy vpn"]);
@@ -247,7 +248,7 @@ describe("the memory loop", () => {
     const preference = afterSearch.saved.find((r) => r.title === prPreference.title)!;
     await rpc.undoMemory!({ eventId: preference.eventId });
     expect(lobu.memories.find((m) => m.id === preference.eventId)?.deleted).toBe(true);
-    const final = (await rpc.memoryOverview!({})) as typeof overview;
+    const final = { saved: await savedIn("thread-1") };
     expect(final.saved.map((r) => r.eventId)).not.toContain(preference.eventId);
   });
 

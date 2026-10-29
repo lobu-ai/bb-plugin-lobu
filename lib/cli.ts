@@ -2,17 +2,18 @@
 // Dock inherits launchd's PATH (/usr/bin:/bin:/usr/sbin:/sbin), so the CLI's
 // `#!/usr/bin/env node` cannot find a Homebrew, nvm, or Bun install of node.
 // The plugin therefore runs it with the PATH the user's login shell sets up.
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
-import type { SetupCode } from "./contract";
 
 const execFileAsync = promisify(execFile);
 
 const SHELL_TIMEOUT_MS = 5_000;
 const CLI_TIMEOUT_MS = 20_000;
+/** How long `lobu login` may take to print its approval URL. */
+const APPROVAL_URL_WAIT_MS = 15_000;
 const MARKER = "__BB_PLUGIN_LOBU_PATH__";
 
 /** Where CLI installers put binaries, kept when the shell cannot be read. */
@@ -20,7 +21,9 @@ function wellKnownDirs(home: string): string[] {
   return [join(home, ".bun", "bin"), "/opt/homebrew/bin", "/usr/local/bin"];
 }
 
-/** Lobu cannot be reached at all; the page turns this into setup steps. */
+export type SetupCode = "cli_missing" | "cli_failed" | "not_logged_in";
+
+/** Lobu cannot be reached through the CLI login. */
 export class LobuSetupError extends Error {
   constructor(
     readonly code: SetupCode,
@@ -95,6 +98,19 @@ export function cliFailure(error: unknown, context: string | null): LobuSetupErr
   return new LobuSetupError("cli_failed", context, `bb could not run the lobu CLI: ${detail}`);
 }
 
+/** The first line of CLI output that is a whole http(s) URL, such as `lobu login`'s approval page. */
+export function firstUrl(output: string): string | null {
+  for (const line of output.split("\n")) {
+    try {
+      const url = new URL(line.trim());
+      if (url.protocol === "https:" || url.protocol === "http:") return url.href;
+    } catch {
+      // Not a URL line.
+    }
+  }
+  return null;
+}
+
 /** Runs CLI commands with the login shell's PATH, read once per runner. */
 export function createCliRunner(lobuBin: string) {
   const home = homedir();
@@ -106,9 +122,45 @@ export function createCliRunner(lobuBin: string) {
     });
     return prepared;
   };
-  return async function run(args: string[]): Promise<string> {
-    const { bin, env } = await prepare();
-    const { stdout } = await execFileAsync(bin, args, { env, timeout: CLI_TIMEOUT_MS });
-    return stdout;
+  return {
+    async run(args: string[]): Promise<string> {
+      const { bin, env } = await prepare();
+      const { stdout } = await execFileAsync(bin, args, { env, timeout: CLI_TIMEOUT_MS });
+      return stdout;
+    },
+
+    /**
+     * Starts a command that keeps running, like `lobu login` waiting for
+     * browser approval, and resolves with the first URL it prints (null if it
+     * prints none in time). The CLI bounds its own wait; a failure before any
+     * URL rejects with its last line of output.
+     */
+    async start(args: string[]): Promise<string | null> {
+      const { bin, env } = await prepare();
+      const child = spawn(bin, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+      child.unref();
+      let output = "";
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve(null), APPROVAL_URL_WAIT_MS);
+        const read = (chunk: Buffer) => {
+          output += chunk.toString();
+          const url = firstUrl(output);
+          if (url === null) return;
+          clearTimeout(timer);
+          resolve(url);
+        };
+        child.stdout.on("data", read);
+        child.stderr.on("data", read);
+        child.on("error", (error) => {
+          clearTimeout(timer);
+          reject(cliFailure(error, null));
+        });
+        child.on("exit", (code) => {
+          clearTimeout(timer);
+          if (code === 0) resolve(firstUrl(output));
+          else reject(new Error(lastLine(output) || `lobu ${args[0]} exited with ${String(code)}`));
+        });
+      });
+    },
   };
 }

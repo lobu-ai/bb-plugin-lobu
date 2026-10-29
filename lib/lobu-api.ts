@@ -84,7 +84,8 @@ export function embeddableOrigin(url: string): string | null {
 }
 
 export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
-  const runLobu = createCliRunner(lobuBin);
+  const cli = createCliRunner(lobuBin);
+  const runLobu = cli.run;
   const tokens = new Map<string, { value: string; mintedAt: number }>();
   const contextLabel = (context: string | null) => context ?? "the active context";
 
@@ -165,6 +166,24 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
     },
 
     /**
+     * Adds a CLI context for this Lobu and starts its login, which the CLI
+     * finishes once the user approves it in the browser (the CLI opens the
+     * page itself for HTTPS). Returns the approval URL it printed.
+     */
+    async addContext(name: string, url: string): Promise<string | null> {
+      try {
+        // `--` keeps a name that starts with a dash from reading as an option.
+        await runLobu(["context", "add", "--url", url, "--", name]);
+      } catch (error) {
+        const failure = error as { code?: unknown; stderr?: unknown; stdout?: unknown };
+        if (failure.code === "ENOENT") throw cliFailure(error, name);
+        const detail = [failure.stderr, failure.stdout].map((text) => (typeof text === "string" ? text.trim() : "")).find((text) => text !== "");
+        throw new Error(detail ?? `lobu could not add the ${name} context.`);
+      }
+      return cli.start(["login", "--context", name, "--wait-for-approval"]);
+    },
+
+    /**
      * A Lobu web session for this CLI login, minted by the route Lobu's own
      * extension and Mac app use. The page gets this session, never the CLI token.
      */
@@ -238,16 +257,6 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
       })) as { success?: boolean; return_value?: { deleted_ids?: number[]; already_superseded_ids?: number[] }; error?: { message?: string } };
       if (result.success !== true) throw new Error(result.error?.message ?? "run_sdk failed");
       return [...(result.return_value?.deleted_ids ?? []), ...(result.return_value?.already_superseded_ids ?? [])];
-    },
-
-    /** Runs a read-only script in one workspace and returns its value. */
-    async querySdk(context: string | null, workspace: string, title: string, script: string): Promise<unknown> {
-      const result = (await request(context, `/api/${encodeURIComponent(workspace)}/query_sdk`, {
-        title,
-        script,
-      })) as { success?: boolean; return_value?: unknown; error?: { message?: string } };
-      if (result.success !== true) throw new Error(result.error?.message ?? "query_sdk failed");
-      return result.return_value;
     },
   };
 }
