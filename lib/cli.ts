@@ -14,6 +14,11 @@ const SHELL_TIMEOUT_MS = 5_000;
 const CLI_TIMEOUT_MS = 20_000;
 /** How long `lobu login` may take to print its approval URL. */
 const APPROVAL_URL_WAIT_MS = 15_000;
+/** A global package install downloads the CLI and its dependencies. */
+const INSTALL_TIMEOUT_MS = 180_000;
+/** The CLI major the plugin is built against: `context list --json` arrived in 24. */
+export const CLI_MAJOR = 24;
+const CLI_PACKAGE = `@lobu/cli@^${CLI_MAJOR}`;
 const MARKER = "__BB_PLUGIN_LOBU_PATH__";
 
 /** Where CLI installers put binaries, kept when the shell cannot be read. */
@@ -98,6 +103,42 @@ export function cliFailure(error: unknown, context: string | null): LobuSetupErr
   return new LobuSetupError("cli_failed", context, `bb could not run the lobu CLI: ${detail}`);
 }
 
+/** A package manager on the user's PATH that can install the CLI globally. */
+export interface Installer {
+  bin: string;
+  args: string[];
+  /** The same install, as the user would type it. */
+  command: string;
+}
+
+const INSTALL_ARGS = { bun: ["add", "-g", CLI_PACKAGE], npm: ["install", "-g", CLI_PACKAGE] } as const;
+
+/** The install as typed, for when no package manager is found or the button fails. */
+export const FALLBACK_INSTALL = `npm install -g ${CLI_PACKAGE}`;
+
+/** Bun when it is anywhere on the PATH, else npm; null with neither. */
+export function findInstaller(dirs: string[]): Installer | null {
+  for (const tool of ["bun", "npm"] as const) {
+    for (const dir of dirs) {
+      const bin = join(dir, tool);
+      if (existsSync(bin)) return { bin, args: [...INSTALL_ARGS[tool]], command: `${tool} ${INSTALL_ARGS[tool].join(" ")}` };
+    }
+  }
+  return null;
+}
+
+/** The major version from `lobu --version` output such as "24.2.0"; null when it is not one. */
+export function cliMajor(output: string): number | null {
+  const major = Number(output.trim().split("\n").pop()?.trim().split(".")[0]);
+  return Number.isInteger(major) && major > 0 ? major : null;
+}
+
+export type CliState =
+  | { state: "missing" }
+  | { state: "broken"; detail: string }
+  | { state: "outdated"; version: string }
+  | { state: "ready"; version: string };
+
 /** The first line of CLI output that is a whole http(s) URL, such as `lobu login`'s approval page. */
 export function firstUrl(output: string): string | null {
   for (const line of output.split("\n")) {
@@ -114,19 +155,56 @@ export function firstUrl(output: string): string | null {
 /** Runs CLI commands with the login shell's PATH, read once per runner. */
 export function createCliRunner(lobuBin: string) {
   const home = homedir();
-  let prepared: Promise<{ bin: string; env: NodeJS.ProcessEnv }> | null = null;
+  let prepared: Promise<{ bin: string; dirs: string[]; env: NodeJS.ProcessEnv }> | null = null;
   const prepare = () => {
     prepared ??= loginShellPath(process.env.SHELL).then((shellPath) => {
       const dirs = mergePath(shellPath, process.env.PATH, home);
-      return { bin: resolveLobuBin(lobuBin, dirs, home), env: { ...process.env, PATH: dirs.join(delimiter) } };
+      return { bin: resolveLobuBin(lobuBin, dirs, home), dirs, env: { ...process.env, PATH: dirs.join(delimiter) } };
     });
     return prepared;
   };
+  async function run(args: string[]): Promise<string> {
+    const { bin, env } = await prepare();
+    const { stdout } = await execFileAsync(bin, args, { env, timeout: CLI_TIMEOUT_MS });
+    return stdout;
+  }
   return {
-    async run(args: string[]): Promise<string> {
-      const { bin, env } = await prepare();
-      const { stdout } = await execFileAsync(bin, args, { env, timeout: CLI_TIMEOUT_MS });
-      return stdout;
+    run,
+
+    /** Whether the CLI is installed, starts, and is new enough. */
+    async state(): Promise<CliState> {
+      let output: string;
+      try {
+        output = await run(["--version"]);
+      } catch (error) {
+        const failure = cliFailure(error, null);
+        return failure.code === "cli_missing" ? { state: "missing" } : { state: "broken", detail: failure.message };
+      }
+      const version = output.trim().split("\n").pop()?.trim() ?? "";
+      const major = cliMajor(output);
+      if (major === null) return { state: "broken", detail: `lobu --version printed "${version}"` };
+      return major < CLI_MAJOR ? { state: "outdated", version } : { state: "ready", version };
+    },
+
+    async installer(): Promise<Installer | null> {
+      return findInstaller((await prepare()).dirs);
+    },
+
+    /** Installs or updates the CLI with bun or npm, never with sudo, then finds it again. */
+    async install(): Promise<void> {
+      const { dirs, env } = await prepare();
+      const installer = findInstaller(dirs);
+      if (installer === null) throw new Error("Neither bun nor npm is on your PATH.");
+      try {
+        await execFileAsync(installer.bin, installer.args, { env, timeout: INSTALL_TIMEOUT_MS });
+      } catch (error) {
+        const failure = error as { killed?: boolean; stderr?: unknown; stdout?: unknown };
+        if (failure.killed) throw new Error(`${installer.command} did not finish within ${INSTALL_TIMEOUT_MS / 60_000} minutes.`);
+        throw new Error(lastLine(failure.stderr) || lastLine(failure.stdout) || `${installer.command} failed.`);
+      } finally {
+        // The binary may now live somewhere the cached lookup did not find it.
+        prepared = null;
+      }
     },
 
     /**

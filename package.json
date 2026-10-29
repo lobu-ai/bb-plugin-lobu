@@ -1,7 +1,7 @@
 {
   "name": "bb-plugin-lobu",
   "version": "0.4.1",
-  "description": "Lobu in bb: save what your agents learn to Lobu memory, start threads with it, and see what bb saved inside Lobu's own app, for any of your lobu CLI logins.",
+  "description": "Lobu in bb: save what your agents learn to Lobu memory and start threads with it, with setup that installs the Lobu CLI and signs you in.",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -18,7 +18,7 @@
   },
   "bb": {
     "name": "Lobu",
-    "description": "Save what your agents learn to Lobu memory, and see what bb saved in Lobu's app.",
+    "description": "Save what your agents learn to Lobu memory and start every thread with it.",
     "branding": {
       "icon": "./icons/lobu.svg",
       "logo": {

@@ -64,16 +64,8 @@ export function parseCliContexts(listed: unknown): CliContext[] {
     .sort((a, b) => Number(b.current) - Number(a.current));
 }
 
-/** Contexts with a login on this Lobu, the active one first. */
-export function contextsForLobu(listed: unknown, baseUrl: string): string[] {
-  const origin = originOf(baseUrl);
-  return parseCliContexts(listed)
-    .filter((context) => context.loggedIn && context.origin === origin)
-    .map((context) => context.name);
-}
-
-/** Lobu origins the embedded app may load: HTTPS, or HTTP on this machine. */
-export function embeddableOrigin(url: string): string | null {
+/** Lobu origins the plugin talks to: HTTPS, or HTTP on this machine. */
+export function lobuOrigin(url: string): string | null {
   try {
     const parsed = new URL(url);
     const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
@@ -139,31 +131,43 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
     throw new Error("unreachable");
   }
 
-  return {
-    /**
-     * Every CLI login on this Lobu, so each workspace the user authorized
-     * appears without configuration. Null when the CLI cannot list them
-     * (missing, or older than `context list --json`); callers then use the
-     * active context.
-     */
-    async contexts(): Promise<string[] | null> {
-      try {
-        const names = contextsForLobu(JSON.parse(await runLobu(["context", "list", "--json"])), baseUrl);
-        return names.length === 0 ? null : names;
-      } catch {
-        return null;
-      }
-    },
+  /** Who this CLI context is signed in as, and the workspaces it is authorized for. */
+  async function identity(context: string | null): Promise<{ account: string | null; workspaces: Workspace[] }> {
+    const info = (await request(context, "/oauth/userinfo")) as {
+      email?: string;
+      organizations?: { slug: string; name?: string; personal?: boolean }[];
+    };
+    return {
+      account: typeof info.email === "string" ? info.email : null,
+      workspaces: (info.organizations ?? []).map((org) => ({
+        slug: org.slug,
+        name: org.name ?? org.slug,
+        personal: org.personal === true,
+      })),
+    };
+  }
 
-    /** Every CLI context for the context picker; null when the CLI cannot list them as JSON. */
-    async cliContexts(): Promise<CliContext[] | null> {
-      try {
-        const listed = parseCliContexts(JSON.parse(await runLobu(["context", "list", "--json"])));
-        return listed.length === 0 ? null : listed;
-      } catch {
-        return null;
-      }
-    },
+  /** Every CLI context, the active one first; null when the CLI cannot list them as JSON. */
+  async function cliContexts(): Promise<CliContext[] | null> {
+    try {
+      const listed = parseCliContexts(JSON.parse(await runLobu(["context", "list", "--json"])));
+      return listed.length === 0 ? null : listed;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Starts `lobu login` for a context (null: the CLI's active one). The CLI
+   * opens Lobu's approval page for HTTPS and finishes once the user
+   * approves; returns the approval URL it printed.
+   */
+  function signIn(context: string | null): Promise<string | null> {
+    return cli.start(["login", ...(context === null ? [] : ["--context", context]), "--wait-for-approval"]);
+  }
+
+  return {
+    cliContexts,
 
     /**
      * Adds a CLI context for this Lobu and starts its login, which the CLI
@@ -180,46 +184,17 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
         const detail = [failure.stderr, failure.stdout].map((text) => (typeof text === "string" ? text.trim() : "")).find((text) => text !== "");
         throw new Error(detail ?? `lobu could not add the ${name} context.`);
       }
-      return cli.start(["login", "--context", name, "--wait-for-approval"]);
+      return signIn(name);
     },
 
-    /**
-     * A Lobu web session for this CLI login, minted by the route Lobu's own
-     * extension and Mac app use. The page gets this session, never the CLI token.
-     */
-    async webSession(context: string | null, origin: string): Promise<string> {
-      for (const fresh of [false, true]) {
-        const response = await fetch(`${origin}/api/extension-session`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({ token: await token(context, fresh) }).toString(),
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        });
-        if (response.status === 401 && !fresh) continue;
-        const body = (await response.json().catch(() => null)) as {
-          session_token?: unknown;
-          error_description?: unknown;
-        } | null;
-        if (response.ok && typeof body?.session_token === "string") return body.session_token;
-        const detail = typeof body?.error_description === "string" ? `: ${body.error_description}` : "";
-        if (response.status === 401 || response.status === 403) {
-          throw new LobuSetupError("not_logged_in", context, `Lobu would not open the app for ${contextLabel(context)}${detail}.`);
-        }
-        throw new Error(`Lobu returned ${response.status} when opening the app${detail}.`);
-      }
-      throw new Error("unreachable");
-    },
+    signIn,
+    identity,
+    cliState: cli.state,
+    installer: cli.installer,
+    installCli: cli.install,
 
-    /** Workspaces the login for this CLI context is authorized for. */
     async workspaces(context: string | null): Promise<Workspace[]> {
-      const info = (await request(context, "/oauth/userinfo")) as {
-        organizations?: { slug: string; name?: string; personal?: boolean }[];
-      };
-      return (info.organizations ?? []).map((org) => ({
-        slug: org.slug,
-        name: org.name ?? org.slug,
-        personal: org.personal === true,
-      }));
+      return (await identity(context)).workspaces;
     },
 
     /** Saves one memory with Lobu's save_memory tool; returns the saved event. */

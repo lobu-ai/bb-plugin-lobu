@@ -1,25 +1,28 @@
 # Lobu for bb
 
 A [bb](https://getbb.app) plugin that saves what your agents learn to
-[Lobu](https://lobu.ai) memory, hands it back to the next thread, and shows
-what bb saved inside Lobu's own app.
+[Lobu](https://lobu.ai) memory and hands it back to the next thread.
 
-## The Lobu page
+## Getting connected
 
-A **Lobu** page in the bb sidebar shows Lobu's events page, signed in with
-your `lobu` CLI login and filtered to the memories bb saved. When bb saved to
-more than one workspace, it shows the one saved to most recently.
+After you install the plugin, a **Connect Lobu memory** card on bb's New
+thread screen walks you through setup, one button at a time:
 
-The bar at the top has:
+1. **Install the Lobu CLI.** The plugin talks to Lobu through the `lobu`
+   CLI. If bun or npm is on your login shell's `PATH`, the button runs
+   `bun add -g @lobu/cli@^24` (or `npm install -g @lobu/cli@^24`), never
+   with sudo, then checks that `lobu --version` runs. If that fails, or
+   neither tool is found, the card shows the command to run yourself and a
+   **Check again** button. An older CLI gets an **Update** button instead.
+2. **Sign in.** The button runs `lobu login`, which opens Lobu's approval page
+   in your browser. You can create a Lobu account there too. The card
+   updates once you approve.
+3. The card disappears once bb is connected.
 
-- A **context picker** listing your `lobu` CLI contexts, like the Lobu Mac
-  app. The choice is remembered.
-- **New context** (+), which adds a CLI context from a name and a Lobu URL and
-  signs it in. The CLI opens Lobu's approval page in your browser, and the
-  page switches to the new context once you approve.
-- **Reload**, and **Open in browser** for the same view in a browser tab.
-
-The Lobu server has to allow bb's address to frame it; see [Notes](#notes).
+The same steps live on in Settings → Plugins → Lobu, in a **Lobu account**
+section that shows which login bb uses and who it is signed in as. Pick
+another `lobu` CLI context there, or **Add a login** with a name and a Lobu
+URL, which adds the context and signs it in the same way.
 
 ## Memory
 
@@ -50,6 +53,11 @@ a box to add a note every new thread should know, and the exact brief its
 threads start with. Undo hides the memory with Lobu's own delete, which keeps
 it recoverable in Lobu. To move or edit a memory, open it in Lobu.
 
+To see everything bb saved, choose **See everything bb saved in Lobu** in the
+panel, or **Open what bb saved in Lobu** in the thread's ⋯ menu. Both open
+Lobu's events page filtered to those memories, in bb's browser or yours,
+following your bb browser setting.
+
 You can still save by hand. Hover any message and choose **Save to Lobu**, or
 highlight part of an answer and pick **Save to Lobu** from the selection
 menu; a review form opens with that text. **Save learnings to Lobu** in the
@@ -69,12 +77,8 @@ thread first.
 ## Requirements
 
 - bb 0.46 or newer.
-- The Lobu CLI, logged in:
-
-  ```sh
-  npm install -g @lobu/cli
-  lobu login
-  ```
+- bun or npm, so the plugin can install the Lobu CLI for you. Without either,
+  install `@lobu/cli` yourself.
 
 ## Install
 
@@ -84,24 +88,21 @@ bb plugin install git:https://github.com/lobu-ai/bb-plugin-lobu.git
 
 ## How it talks to Lobu
 
-The plugin reuses your `lobu` CLI logins. bb opened from the Dock does not
+The plugin uses one `lobu` CLI login: the context in the `login` setting, or
+the CLI's active context when that is empty. bb opened from the Dock does not
 see your shell's `PATH`, so the plugin reads `PATH` once from your login shell
-and runs the CLI with it, the same way your terminal does. It runs `lobu context list --json`
-and keeps every context that is logged in to the configured Lobu URL. For each
-one it runs `lobu token --raw` and asks Lobu which workspaces that login covers.
+and runs the CLI with it, the same way your terminal does. It reads the
+context's Lobu URL from `lobu context list --json`, runs `lobu token --raw`,
+and asks Lobu which workspaces that login covers.
 
 Memory writes use Lobu's own tools: `save_memory` to save, and `run_sdk` with
 `knowledge.delete` to undo. Searches use
 `search_memory`. What the plugin saved, project links, pins, and each
 thread's log stay in the plugin's bb storage. Recaps read the archived thread through bb's
-own thread API. CLI tokens stay in the bb server process. The page receives
-the form's contents and, for the embedded app, a Lobu web session
-the server mints with Lobu's `/api/extension-session`, the route Lobu's Chrome
-extension and Mac app use. The session reaches the frame in the URL fragment,
-which is never sent to a server, and Lobu's bootstrap page removes it from
-history before signing the frame in. Lobu's bootstrap page always lands on
-its home page, so the plugin then moves the signed-in frame to the events
-page filtered by the ids of the memories bb saved (`content_ids`).
+own thread API. CLI tokens stay in the bb server process; the page never
+receives one. "Open in Lobu" links to Lobu's events page filtered by the ids
+of the memories bb saved (`content_ids`), so it shows them to whoever is
+signed in to Lobu in that browser.
 
 ## Settings
 
@@ -110,7 +111,7 @@ Open them in bb under Settings → Plugins → Lobu, or use `bb plugin config lo
 | Setting | Default | Description |
 |---|---|---|
 | `hiddenWorkspaces` | empty | Comma-separated workspace slugs bb never saves to or searches. |
-| `baseUrl` | `https://app.lobu.ai` | Change only for a self-hosted Lobu. |
+| `login` | empty | The `lobu` CLI context bb saves and searches through. Empty follows the CLI's active context. Set it from the Lobu account section. |
 | `lobuBin` | empty | Path to the `lobu` CLI. Empty tries `~/.bun/bin/lobu`, then `lobu` on your login shell's `PATH`. |
 | `autoSave` | `true` | Save what agents learn to your personal workspace without asking. Off opens a review form for every save. |
 | `recapOnArchive` | `false` | Recap threads when you archive them and save what they learned. Needs `autoSave`. |
@@ -119,19 +120,12 @@ Open them in bb under Settings → Plugins → Lobu, or use `bb plugin config lo
 
 ## Notes
 
-- Memory uses the workspaces your CLI logins on the configured Lobu URL
-  cover. Each login only covers the workspaces you approved when you signed
-  in. If one is missing, sign in again and approve it, or add a context with
-  **New context**.
-- The context picker needs a Lobu CLI with `lobu context list --json`. An
-  older CLI shows only its active context.
-- bb saves to the Lobu in the `baseUrl` setting, so a context on another
-  Lobu shows nothing from bb.
-- The embedded app needs the Lobu server to allow bb as a frame ancestor.
-  Lobu sends `frame-ancestors` from its `FRAME_ANCESTORS` setting, so a
-  self-hosted Lobu adds bb's address there, for example
-  `http://127.0.0.1:38886`. Until it does, the frame shows the browser's
-  blocked-page icon; **Open in browser** still works.
+- Memory uses the workspaces the login bb uses covers. Each login only covers
+  the workspaces you approved when you signed in. If one is missing, sign in
+  again and approve it, or add another login.
+- Picking a login needs CLI 24 or newer (`lobu context list --json`). With an
+  older CLI the plugin uses its active context on `https://app.lobu.ai`, and
+  the setup card offers an update.
 
 ## Development
 

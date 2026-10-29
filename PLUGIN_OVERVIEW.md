@@ -1,4 +1,4 @@
-Keep what your agents learn in Lobu memory, and see it in Lobu without leaving bb.
+Keep what your agents learn in Lobu memory, without leaving bb.
 
 ## What you get
 
@@ -7,15 +7,14 @@ Keep what your agents learn in Lobu memory, and see it in Lobu without leaving b
   with undo and pin in each thread's Lobu memory panel.
 - **Save to Lobu** on any message, and **Save learnings to Lobu** for a whole
   thread, through a review form.
-- A **Lobu** page in the sidebar: Lobu's own app showing what bb saved, with
-  a picker for your `lobu` CLI contexts and a button to add and sign in a new
-  one.
+- **Open what bb saved in Lobu** opens Lobu's own page of those memories.
+
+## Getting started
+
+A card on the New thread screen installs the Lobu CLI with bun or npm and
+signs you in through Lobu's approval page. Settings → Plugins → Lobu shows the
+login bb uses and lets you switch or add one.
 
 ## How it works
 
-The plugin reuses your `lobu` CLI logins. Tokens stay in the bb server; the
-embedded app gets a Lobu web session minted for it.
-
-## Requirements
-
-The Lobu CLI (`npm install -g @lobu/cli`), logged in with `lobu login`.
+The plugin uses your `lobu` CLI login. Tokens stay in the bb server.

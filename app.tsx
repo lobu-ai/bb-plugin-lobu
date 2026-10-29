@@ -6,9 +6,10 @@ import {
   type PluginBrowserBbSdk,
   useSdk,
 } from "@get-bb/plugin-sdk/app";
-import { LobuApp } from "@/components/lobu-app";
+import { SetupCard, SetupSettings } from "@/components/setup";
 import { ThreadMemoryPanel } from "@/components/memory";
 import { RememberFormView } from "@/components/remember-form";
+import { z } from "zod";
 import { learnResultSchema, REMEMBER_RENDERER, rememberResultSchema } from "@/lib/memory-contract";
 
 const PLUGIN_ID = "lobu";
@@ -29,13 +30,14 @@ async function openReview(threadId: string, text: string) {
 }
 
 export default definePluginApp((app) => {
-  // Lobu's own view of what bb saved, for the CLI login picked at the top.
-  app.slots.navPanel({
-    id: "dashboard",
-    title: "Lobu",
-    icon: "lobu/lobu",
-    path: "dashboard",
-    component: LobuApp,
+  // Setup: a card on the New thread screen until bb is connected, and an
+  // account section on the plugin's settings page.
+  app.slots.homepageSection({ id: "connect", title: "Lobu", component: SetupCard });
+  app.slots.settingsSection({
+    id: "account",
+    title: "Lobu account",
+    description: "The lobu CLI login bb saves and searches through.",
+    component: SetupSettings,
   });
 
   // What this thread started with, looked up, and saved, with undo and pin.
@@ -56,6 +58,28 @@ export default definePluginApp((app) => {
     icon: "lobu/lobu",
     run: ({ threadId, message, selectedText }) =>
       openReview(threadId, selectedText?.trim() ? selectedText : message.text),
+  });
+
+  // Lobu's own page of everything bb saved.
+  app.slots.experimental_threadAction({
+    id: "open-in-lobu",
+    title: "Open what bb saved in Lobu",
+    icon: "lobu/lobu",
+    group: experimental_THREAD_ACTION_GROUPS.organize,
+    item: ({ sdk: client, navigate }) => ({
+      label: "Open what bb saved in Lobu",
+      icon: "lobu/lobu",
+      run: async () => {
+        const { url } = await client.plugins.callRpc({
+          pluginId: PLUGIN_ID,
+          method: "savedLink",
+          input: {},
+          outputSchema: z.object({ url: z.string().nullable() }),
+        });
+        if (url === null) throw new Error("bb has not saved anything to Lobu through this login yet.");
+        navigate.openUrl(url);
+      },
+    }),
   });
 
   // Ask the thread's agent to propose what is worth keeping.

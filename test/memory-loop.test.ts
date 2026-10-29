@@ -38,9 +38,6 @@ let root: string;
 
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "lobu-memory-loop-"));
-  const cli = join(root, "lobu");
-  writeFileSync(cli, `#!/bin/sh\nif [ "$1" = token ]; then echo ${TOKEN}; else exit 1; fi\n`);
-  chmodSync(cli, 0o755);
   process.env.SHELL = join(root, "no-shell");
   server = Bun.serve({
     port: 0,
@@ -49,6 +46,7 @@ beforeAll(() => {
       const url = new URL(request.url);
       if (url.pathname === "/oauth/userinfo") {
         return Response.json({
+          email: "someone@example.com",
           organizations: [
             { slug: "me", name: "Me", personal: true },
             { slug: "team", name: "Team" },
@@ -101,6 +99,27 @@ beforeAll(() => {
   });
 });
 
+beforeAll(() => {
+  // A CLI 24 with one context, logged in to the fake Lobu.
+  const contexts = JSON.stringify({
+    current: "work",
+    contexts: [{ name: "work", url: `http://localhost:${server.port}/api/v1`, current: true, loggedIn: true }],
+  });
+  const cli = join(root, "lobu");
+  writeFileSync(
+    cli,
+    [
+      "#!/bin/sh",
+      `if [ "$1" = token ]; then echo ${TOKEN}; exit 0; fi`,
+      'if [ "$1" = --version ]; then echo 24.2.0; exit 0; fi',
+      `if [ "$1" = context ] && [ "$2" = list ]; then echo '${contexts}'; exit 0; fi`,
+      "exit 1",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(cli, 0o755);
+});
+
 afterAll(() => {
   server.stop(true);
   rmSync(root, { recursive: true, force: true });
@@ -116,7 +135,7 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
   const formRequests: unknown[] = [];
   const values = {
     hiddenWorkspaces: "",
-    baseUrl: `http://localhost:${server.port}`,
+    login: "",
     lobuBin: join(root, "lobu"),
     autoSave: true,
     recapOnArchive: false,
@@ -126,7 +145,13 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
   };
   const bb = {
     pluginId: "lobu",
-    settings: { define: () => ({ get: async () => values, onChange: () => undefined }) },
+    settings: {
+      define: () => ({
+        get: async () => values,
+        experimental_set: async (next: Record<string, unknown>) => Object.assign(values, next),
+        onChange: () => undefined,
+      }),
+    },
     storage: {
       kv: {
         get: async (key: string) => kv.get(key),
@@ -250,6 +275,17 @@ describe("the memory loop", () => {
     expect(lobu.memories.find((m) => m.id === preference.eventId)?.deleted).toBe(true);
     const final = { saved: await savedIn("thread-1") };
     expect(final.saved.map((r) => r.eventId)).not.toContain(preference.eventId);
+
+    // The setup check sees the CLI, the login bb uses, and its personal workspace.
+    const status = (await rpc.setupStatus!({})) as { cli: { state: string }; login: { context: string; account: string; personal: string; problem: null } };
+    expect(status.cli.state).toBe("ready");
+    expect(status.login).toMatchObject({ context: "work", account: "someone@example.com", personal: "me", problem: null });
+
+    // "Open in Lobu" lands on the events page filtered to what bb saved and has not undone.
+    const { url } = (await rpc.savedLink!({})) as { url: string };
+    expect(url.startsWith(`http://localhost:${server.port}/me/events?content_ids=`)).toBe(true);
+    expect(url).not.toContain(String(preference.eventId));
+    expect(url).toContain(String(final.saved.find((r) => r.title === deployGotcha.title)!.eventId));
   });
 
   test("with auto-save off, memories go through the review form", async () => {

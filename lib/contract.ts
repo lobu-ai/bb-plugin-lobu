@@ -12,25 +12,64 @@ import {
 const cliContextSchema = z.object({ name: z.string(), origin: z.string(), current: z.boolean(), loggedIn: z.boolean() });
 export type CliContextOption = z.infer<typeof cliContextSchema>;
 
+const setupStatusSchema = z.object({
+  cli: z.discriminatedUnion("state", [
+    z.object({ state: z.literal("missing") }),
+    z.object({ state: z.literal("broken"), detail: z.string() }),
+    z.object({ state: z.literal("outdated"), version: z.string() }),
+    z.object({ state: z.literal("ready"), version: z.string() }),
+  ]),
+  /** The install command the button runs; null when neither bun nor npm is found. */
+  installCommand: z.string().nullable(),
+  /** The command to show when the button cannot run or fails. */
+  manualCommand: z.string(),
+  logins: z.array(cliContextSchema),
+  /** The login bb saves and searches through; null until the CLI runs. */
+  login: z
+    .object({
+      context: z.string().nullable(),
+      origin: z.string(),
+      /** Who it is signed in as; null when it is not signed in. */
+      account: z.string().nullable(),
+      personal: z.string().nullable(),
+      problem: z.string().nullable(),
+    })
+    .nullable(),
+});
+export type SetupStatus = z.infer<typeof setupStatusSchema>;
+
+const approvalSchema = z.object({ approvalUrl: z.string().nullable() });
+
 export const rpcContract = defineRpcContract({
-  /** The `lobu` CLI contexts for the page's context picker. Empty when the CLI cannot list them; the page then uses the active login on fallbackOrigin. */
-  lobuContexts: {
+  /** Whether bb can reach Lobu: the CLI, the login bb uses, and every login to pick from. */
+  setupStatus: {
     input: z.object({}),
-    output: z.object({ contexts: z.array(cliContextSchema), fallbackOrigin: z.string() }),
+    output: setupStatusSchema,
   },
-  /**
-   * What bb saved, in the embedded Lobu app for one CLI context (null: the
-   * active one). `path` is null when bb saved nothing this login reaches; then
-   * there is no session either.
-   */
-  lobuApp: {
-    input: z.object({ context: z.string().nullable() }),
-    output: z.object({ origin: z.string(), path: z.string().nullable(), signInUrl: z.string().nullable() }),
+  /** Installs or updates the CLI with bun or npm. `error` is the installer's last line when it fails. */
+  installCli: {
+    input: z.object({}),
+    output: z.object({ error: z.string().nullable() }),
   },
-  /** Adds a CLI context and starts its browser login; the page waits for `lobuContexts` to show it signed in. */
-  addContext: {
+  /** Starts `lobu login` for the login bb uses; the page waits for `setupStatus` to show it signed in. */
+  signIn: {
+    input: z.object({}),
+    output: approvalSchema,
+  },
+  /** Adds a CLI context and starts its login. */
+  addLogin: {
     input: z.object({ name: z.string().trim().min(1).max(64), url: z.string().trim().min(1) }),
-    output: z.object({ approvalUrl: z.string().nullable() }),
+    output: approvalSchema,
+  },
+  /** Picks the login bb saves and searches through; null follows the CLI's active context. */
+  useLogin: {
+    input: z.object({ context: z.string().nullable() }),
+    output: z.object({ context: z.string().nullable() }),
+  },
+  /** Lobu's events page filtered to what bb saved through the login it uses; null when nothing is saved there. */
+  savedLink: {
+    input: z.object({}),
+    output: z.object({ url: z.string().nullable() }),
   },
   /** Opens the review form in a thread with text the user picked. */
   remember: {

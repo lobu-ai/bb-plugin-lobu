@@ -12,6 +12,7 @@ import type {
   SavedRecord,
   ThreadMemory,
 } from "@/lib/memory-contract";
+import { SetupNotice } from "@/components/setup";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { errorText, formatCount, sinceMs } from "@/lib/format";
@@ -415,6 +416,24 @@ function ProjectContext({
 const THREAD_POLL_MS = 15_000;
 
 /** The thread's Lobu memory panel: what it started with, looked up, and saved. */
+/** Lobu's events page with everything bb saved through the login it uses. */
+function SavedInLobu() {
+  const rpc = useRpc<typeof rpcContract>();
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    rpc.call("savedLink", {}).then(
+      (next) => setUrl(next.url),
+      () => setUrl(null),
+    );
+  }, [rpc]);
+  if (url === null) return null;
+  return (
+    <UrlLink href={url} className="inline-block text-xs text-muted-foreground underline hover:text-foreground">
+      See everything bb saved in Lobu
+    </UrlLink>
+  );
+}
+
 export function ThreadMemoryPanel({ threadId }: { threadId: string }) {
   const rpc = useRpc<typeof rpcContract>();
   const [data, setData] = useState<ThreadMemory | null>(null);
@@ -449,11 +468,13 @@ export function ThreadMemoryPanel({ threadId }: { threadId: string }) {
   const names = new Map(project === null ? [] : [[project.id, project.name]]);
   return (
     <div className="space-y-4">
+      <SetupNotice />
       {error === null ? null : (
         <p role="alert" className="text-sm text-destructive">
           {error}
         </p>
       )}
+      <SavedInLobu />
       <Card icon="lobu/given" title="Started with" aside={given.length === 0 ? undefined : `${given.length} from Lobu`}>
         {given.length === 0 ? (
           <Empty>

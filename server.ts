@@ -2,12 +2,13 @@
 // login. Memory runs as a loop: threads start with their project's Lobu brief,
 // agents search Lobu with lobu_search, and what they learn is saved to the
 // personal workspace (or reviewed in a form first, when auto-save is off).
-// Every save can be undone or pinned from the thread's Lobu memory panel, and
-// the Lobu page embeds Lobu's own view of what bb saved.
+// Every save can be undone or pinned from the thread's Lobu memory panel. A
+// card on the New thread screen installs the CLI and signs in when needed.
 import type { BbPluginApi, PluginThreadEventPayloads } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { rpcContract } from "./lib/contract";
-import { createLobuApi, embeddableOrigin } from "./lib/lobu-api";
+import { CLI_MAJOR, FALLBACK_INSTALL, LobuSetupError } from "./lib/cli";
+import { createLobuApi, lobuOrigin } from "./lib/lobu-api";
 import {
   type MemoryDraft,
   type MemoryHit,
@@ -59,19 +60,16 @@ import {
 const REVIEW_TIMEOUT_MS = 24 * 60 * 60_000;
 /** How long a recap thread may take before it is stopped. */
 const RECAP_TIMEOUT_MS = 10 * 60_000;
-/** How long the list of workspaces the CLI logins reach is reused for memory calls. */
+/** How long the login bb uses and the workspaces it reaches are reused for memory calls. */
 const OWNERS_MS = 5 * 60_000;
 /** A search hit this close to a new memory means Lobu already holds it. */
 const DUPLICATE_SIMILARITY = 0.92;
+/** Where a login lives when the CLI is too old to list its contexts. */
+const DEFAULT_ORIGIN = "https://app.lobu.ai";
+const SETUP_HINT = "Connect Lobu from the card on bb's New thread screen, or under Settings → Plugins → Lobu.";
 
 const LEARN_PROMPT =
   "Look back over this thread and call lobu_remember with the learnings worth keeping across sessions: decisions, non-obvious facts or gotchas, and preferences I stated as standing rules. Most threads contain nothing worth keeping; if so, say so instead of calling the tool. Never propose what this thread built or changed, anything the repo or code already states, generic quality wishes, or task requirements restated as preferences. At most three short, self-contained memories, each with a short evidence quote of the turn or finding it came from. Skip anything temporary, obvious from the code, already saved to Lobu, or sensitive.";
-
-function trimTrailingSlashes(url: string): string {
-  let end = url.length;
-  while (end > 0 && url[end - 1] === "/") end -= 1;
-  return url.slice(0, end);
-}
 
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
@@ -81,11 +79,11 @@ export default async function plugin(bb: BbPluginApi) {
       description: "Comma-separated workspace slugs bb never saves to or searches.",
       default: "",
     },
-    baseUrl: {
+    login: {
       type: "string",
-      label: "Lobu URL",
-      description: "Change this only for a self-hosted Lobu.",
-      default: "https://app.lobu.ai",
+      label: "Lobu login",
+      description: "The lobu CLI context bb saves and searches through. Leave empty to follow the CLI's active context. Pick one in the Lobu account section.",
+      default: "",
     },
     lobuBin: {
       type: "string",
@@ -121,21 +119,32 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
-  async function apiOptions() {
-    const { baseUrl, lobuBin } = await settings.get();
-    return { baseUrl: trimTrailingSlashes(baseUrl.trim()), lobuBin: lobuBin.trim() };
+  // The API talks to the origin of the login bb uses with the configured CLI;
+  // it is rebuilt as soon as either changes.
+  let apiOrigin = DEFAULT_ORIGIN;
+  let apiBin = (await settings.get()).lobuBin.trim();
+  let api = createLobuApi({ baseUrl: apiOrigin, lobuBin: apiBin });
+  function useApi(origin: string, lobuBin: string) {
+    if (origin === apiOrigin && lobuBin === apiBin) return;
+    api = createLobuApi({ baseUrl: origin, lobuBin });
+    apiOrigin = origin;
+    apiBin = lobuBin;
   }
 
-  let api = createLobuApi(await apiOptions());
-
-  /** Every CLI login on this Lobu, or the CLI's active context when it cannot list them. */
-  async function loginContexts(): Promise<(string | null)[]> {
-    return (await api.contexts()) ?? [null];
+  /** The CLI context bb uses (null: the CLI's active one) and the Lobu origin it signs in to. */
+  async function resolveLogin(): Promise<{ context: string | null; origin: string }> {
+    const chosen = (await settings.get()).login.trim();
+    const listed = await api.cliContexts();
+    const entry = listed?.find((c) => (chosen === "" ? c.current : c.name === chosen));
+    const context = chosen === "" ? (entry?.name ?? null) : chosen;
+    const origin = entry?.origin ?? DEFAULT_ORIGIN;
+    useApi(origin, apiBin);
+    return { context, origin };
   }
 
-  settings.onChange(async () => {
-    api = createLobuApi(await apiOptions());
-    ownersCache = null;
+  settings.onChange((next) => {
+    useApi(apiOrigin, next.lobuBin.trim());
+    reach = null;
   });
 
   // ---- Memory loop state. The in-process copy is the source of truth; every
@@ -162,15 +171,26 @@ export default async function plugin(bb: BbPluginApi) {
   }
   void refreshProjects().catch((cause: unknown) => bb.log.warn(`Lobu could not list bb projects: ${String(cause)}`));
 
-  let ownersCache: { at: number; owners: Map<string, WorkspaceOwner> } | null = null;
-  /** Workspaces the CLI logins reach, minus hidden ones; empty when Lobu is unreachable. */
-  async function memoryOwners(): Promise<Map<string, WorkspaceOwner>> {
-    if (ownersCache !== null && Date.now() - ownersCache.at < OWNERS_MS) return ownersCache.owners;
+  interface Reach {
+    at: number;
+    origin: string;
+    owners: Map<string, WorkspaceOwner>;
+    problem: string | null;
+  }
+  let reach: Reach | null = null;
+  /** The workspaces the login bb uses reaches, minus hidden ones; empty when Lobu is unreachable. */
+  async function reachLobu(): Promise<Reach> {
+    if (reach !== null && Date.now() - reach.at < OWNERS_MS) return reach;
+    const { context, origin } = await resolveLogin();
     const { hiddenWorkspaces } = await settings.get();
-    const { owners } = await discoverWorkspaces(api, await loginContexts());
+    const { owners, problem } = await discoverWorkspaces(api, [context]);
     for (const slug of parseList(hiddenWorkspaces)) owners.delete(slug);
-    if (owners.size > 0) ownersCache = { at: Date.now(), owners };
-    return owners;
+    const next = { at: Date.now(), origin, owners, problem };
+    if (owners.size > 0) reach = next;
+    return next;
+  }
+  async function memoryOwners(): Promise<Map<string, WorkspaceOwner>> {
+    return (await reachLobu()).owners;
   }
   function personalOf(owners: Map<string, WorkspaceOwner>): { slug: string; owner: WorkspaceOwner } | null {
     for (const [slug, owner] of owners) if (owner.personal) return { slug, owner };
@@ -178,7 +198,7 @@ export default async function plugin(bb: BbPluginApi) {
   }
   function ownerOf(owners: Map<string, WorkspaceOwner>, slug: string): WorkspaceOwner {
     const owner = owners.get(slug);
-    if (owner === undefined) throw new Error(`None of your lobu CLI logins can reach the ${slug} workspace.`);
+    if (owner === undefined) throw new Error(`The Lobu login bb uses cannot reach the ${slug} workspace.`);
     return owner;
   }
 
@@ -218,8 +238,8 @@ export default async function plugin(bb: BbPluginApi) {
     if (personal !== null) targets.add(personal.slug);
     const linked = projectId === null ? undefined : memory.links[projectId];
     if (linked !== undefined && owners.has(linked)) targets.add(linked);
-    if (targets.size === 0) throw new Error("No Lobu workspace is available. Check that `lobu login` works in a terminal.");
-    const { baseUrl } = await apiOptions();
+    if (targets.size === 0) throw new Error(`No Lobu workspace is available. ${SETUP_HINT}`);
+    const { origin: baseUrl } = await reachLobu();
     // Search returns connector content too; ask for more so enough saved memories remain.
     const fetchLimit = Math.min(limit * 3, 30);
     const lists = await Promise.all(
@@ -242,7 +262,7 @@ export default async function plugin(bb: BbPluginApi) {
     const owners = await memoryOwners();
     const personal = personalOf(owners);
     if (personal === null) return null;
-    const { baseUrl } = await apiOptions();
+    const { origin: baseUrl } = await reachLobu();
     const outcome: AutoSaveOutcome = { workspace: personal.slug, saved: [], duplicates: [], failed: [] };
     for (const draft of drafts) {
       try {
@@ -300,6 +320,12 @@ export default async function plugin(bb: BbPluginApi) {
     return lines.join("\n");
   }
 
+  /** A tool failure for the agent; a missing CLI or login also says where the user fixes it. */
+  function toolError(cause: unknown): string {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    return cause instanceof LobuSetupError ? `${message} ${SETUP_HINT}` : message;
+  }
+
   // Every thread starts with its project's brief: pins, then what earlier threads learned.
   bb.agents.contributeInstructions(({ threadId, projectId }) => {
     const { brief } = projectState(projectId);
@@ -320,10 +346,8 @@ export default async function plugin(bb: BbPluginApi) {
 
   /** The review form for these drafts, with the workspaces the user can save to. */
   async function formFor(drafts: MemoryDraft[]): Promise<{ owners: Map<string, WorkspaceOwner>; form: RememberForm }> {
-    const { hiddenWorkspaces } = await settings.get();
-    const { owners, problem } = await discoverWorkspaces(api, await loginContexts());
-    for (const slug of parseList(hiddenWorkspaces)) owners.delete(slug);
-    if (owners.size === 0) throw new Error(problem ?? "No Lobu workspace is available. Check that `lobu login` works in a terminal.");
+    const { owners, problem } = await reachLobu();
+    if (owners.size === 0) throw new Error(`${problem ?? "No Lobu workspace is available."} ${SETUP_HINT}`);
     const preferred = (await bb.storage.kv.get<string>(PREFERRED_WORKSPACE)) ?? null;
     const picked = pickWorkspaceWithHints(
       owners,
@@ -344,7 +368,7 @@ export default async function plugin(bb: BbPluginApi) {
     const submission = rememberSubmissionSchema.parse(value);
     const owner = owners.get(submission.workspace);
     if (owner === undefined) throw new Error(`Unknown workspace ${submission.workspace}`);
-    const outcome = await saveMemories(api, owner, (await apiOptions()).baseUrl, threadId, submission);
+    const outcome = await saveMemories(api, owner, (await reachLobu()).origin, threadId, submission);
     await bb.storage.kv.set(PREFERRED_WORKSPACE, submission.workspace);
     const projectId = await projectOfThread(threadId);
     const now = Date.now();
@@ -510,7 +534,7 @@ export default async function plugin(bb: BbPluginApi) {
         if (source !== null) return 'Nothing was saved: auto-save is off or no personal Lobu workspace is reachable. Reply with exactly: "Nothing saved."';
         return outcomeForAgent(await review(threadId, memories, signal));
       } catch (cause) {
-        return { content: [{ type: "text", text: cause instanceof Error ? cause.message : String(cause) }], isError: true };
+        return { content: [{ type: "text", text: toolError(cause) }], isError: true };
       }
     },
   });
@@ -549,7 +573,7 @@ export default async function plugin(bb: BbPluginApi) {
           })
           .join("\n");
       } catch (cause) {
-        return { content: [{ type: "text", text: cause instanceof Error ? cause.message : String(cause) }], isError: true };
+        return { content: [{ type: "text", text: toolError(cause) }], isError: true };
       }
     },
   });
@@ -571,30 +595,54 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   bb.rpc.register(rpcContract, {
-    lobuContexts: async () => ({
-      contexts: (await api.cliContexts()) ?? [],
-      fallbackOrigin: embeddableOrigin((await apiOptions()).baseUrl) ?? "",
-    }),
-    lobuApp: async ({ context }) => {
-      const { baseUrl } = await apiOptions();
-      const url = context === null ? baseUrl : (await api.cliContexts())?.find((c) => c.name === context)?.origin;
-      if (url === undefined) throw new Error(`The lobu CLI has no context named ${context}.`);
-      const origin = embeddableOrigin(url);
-      if (origin === null) throw new Error(`bb only embeds Lobu over HTTPS or on this machine, not ${url}.`);
-      // bb saves only to the Lobu in the plugin's settings.
-      if (origin !== new URL(baseUrl).origin) return { origin, path: null, signInUrl: null };
-      const reachable = new Set((await api.workspaces(context)).map((workspace) => workspace.slug));
-      const path = savedEventsPath(memory.saved, reachable);
-      if (path === null) return { origin, path: null, signInUrl: null };
-      const session = await api.webSession(context, origin);
-      // The session rides in the fragment, which never reaches a server; Lobu's
-      // bootstrap page strips it from history before signing the frame in.
-      return { origin, path, signInUrl: `${origin}/api/extension-bootstrap#token=${encodeURIComponent(session)}` };
+    setupStatus: async () => {
+      const cli = await api.cliState();
+      const installer = await api.installer();
+      const base = { cli, installCommand: installer?.command ?? null, manualCommand: FALLBACK_INSTALL, logins: [], login: null };
+      if (cli.state === "missing" || cli.state === "broken") return base;
+      const logins = (await api.cliContexts()) ?? [];
+      const { context, origin } = await resolveLogin();
+      try {
+        const { account, workspaces } = await api.identity(context);
+        const personal = workspaces.find((w) => w.personal)?.slug ?? null;
+        return { ...base, logins, login: { context, origin, account, personal, problem: null } };
+      } catch (cause) {
+        const problem = cause instanceof Error ? cause.message : String(cause);
+        return { ...base, logins, login: { context, origin, account: null, personal: null, problem } };
+      }
     },
-    addContext: async ({ name, url }) => {
-      const origin = embeddableOrigin(url);
+    installCli: async () => {
+      try {
+        await api.installCli();
+      } catch (cause) {
+        return { error: cause instanceof Error ? cause.message : String(cause) };
+      }
+      reach = null;
+      const after = await api.cliState();
+      if (after.state === "ready") return { error: null };
+      if (after.state === "missing") return { error: "The install finished, but bb cannot find lobu on your login shell's PATH." };
+      if (after.state === "broken") return { error: after.detail };
+      return { error: `The install left lobu ${after.version}; bb needs ${CLI_MAJOR} or newer.` };
+    },
+    signIn: async () => {
+      const { context } = await resolveLogin();
+      reach = null;
+      return { approvalUrl: await api.signIn(context) };
+    },
+    addLogin: async ({ name, url }) => {
+      const origin = lobuOrigin(url);
       if (origin === null) throw new Error("Use an HTTPS Lobu URL, or HTTP on this machine.");
       return { approvalUrl: await api.addContext(name, origin) };
+    },
+    useLogin: async ({ context }) => {
+      await settings.experimental_set({ login: context ?? "" });
+      reach = null;
+      return { context };
+    },
+    savedLink: async () => {
+      const { origin, owners } = await reachLobu();
+      const path = savedEventsPath(memory.saved, new Set(owners.keys()));
+      return { url: path === null ? null : `${origin}${path}` };
     },
     remember: async ({ threadId, text }) => {
       // The form stays open until the user answers, so do not hold the RPC.
@@ -652,9 +700,9 @@ export default async function plugin(bb: BbPluginApi) {
     addNote: async ({ projectId, text }) => {
       const owners = await memoryOwners();
       const personal = personalOf(owners);
-      if (personal === null) throw new Error("No personal Lobu workspace is available. Check that `lobu login` works in a terminal.");
+      if (personal === null) throw new Error(`No personal Lobu workspace is available. ${SETUP_HINT}`);
       const draft = draftFromText(text);
-      const { baseUrl } = await apiOptions();
+      const { origin: baseUrl } = await reachLobu();
       const saved = await api.saveMemory(personal.owner.context, personal.slug, {
         title: draft.title,
         content: draft.content,

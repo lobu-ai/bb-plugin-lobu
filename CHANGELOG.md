@@ -2,13 +2,19 @@
 
 ## Unreleased
 
-- The Lobu page is now Lobu's own events page, signed in with your CLI login
-  and filtered to the memories bb saved, with a picker for your CLI contexts
-  and a **New context** button that adds a context and signs it in. Lobu must
-  allow bb's address in its `FRAME_ANCESTORS` setting to be framed.
-- Removed the Needs you dashboard (approvals, failed runs, connections and
-  devices, activity, metrics), its New thread screen summary, and the
-  `metrics` setting. Lobu's own app covers them.
+- Setup is built in. A **Connect Lobu memory** card on the New thread screen
+  installs or updates the Lobu CLI with bun or npm (showing the command when
+  it cannot), then signs you in through Lobu's approval page, and disappears
+  once bb is connected. Settings → Plugins → Lobu gains a **Lobu account**
+  section to see, switch, or add the login bb uses.
+- bb uses one CLI login, set by the new `login` setting (empty follows the
+  CLI's active context). It replaces `baseUrl`: the Lobu URL comes from the
+  login.
+- **Open what bb saved in Lobu**, in the thread's ⋯ menu and the Lobu memory
+  panel, opens Lobu's events page filtered to the memories bb saved.
+- Removed the Lobu sidebar page: the Needs you dashboard (approvals, failed
+  runs, connections and devices, activity, metrics), its New thread screen
+  summary, and the `metrics` setting. Lobu's own app covers them.
 - Archived-thread recaps save like any other memory and need auto-save on;
   the review queue on the Lobu page is gone.
 - Memory runs as a loop. New threads start with their project's Lobu brief:
