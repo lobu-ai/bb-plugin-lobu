@@ -11,9 +11,11 @@ import type {
   WorkspaceSummary,
 } from "@/lib/contract";
 import type { PendingReview } from "@/lib/memory-contract";
+import { MemoryTab } from "@/components/memory";
 import { RememberFields } from "@/components/remember-form";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
+import { formatCount, relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const POLL_MS = 120_000;
@@ -45,21 +47,6 @@ function useSnapshot() {
     return () => clearInterval(timer);
   }, [load]);
   return { snapshot, error, loading, refresh: () => load(true) };
-}
-
-function relativeTime(iso: string | null): string | null {
-  if (iso === null) return null;
-  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
-  if (Number.isNaN(minutes)) return null;
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
-}
-
-function formatCount(n: number): string {
-  return new Intl.NumberFormat(undefined, { notation: n >= 10_000 ? "compact" : "standard" }).format(n);
 }
 
 function total(workspaces: WorkspaceSummary[], pick: (w: WorkspaceSummary) => number): number {
@@ -292,6 +279,7 @@ function PendingReviews() {
   const [reviews, setReviews] = useState<PendingReview[]>([]);
   const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
   const load = useCallback(() => {
     rpc.call("pendingReviews", {}).then(setReviews, (cause: unknown) =>
       setError(cause instanceof Error ? cause.message : String(cause)),
@@ -315,17 +303,26 @@ function PendingReviews() {
   };
   return (
     <section className="rounded-lg border border-border bg-card">
-      <header className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-sm font-medium">
-        <Icon name="lobu/lobu" className="size-4 text-muted-foreground" />
-        Memories to review
-        <span className="ml-auto text-xs text-muted-foreground">{formatCount(reviews.length)}</span>
-        {reviews.length < 2 ? null : (
+      <header className={cn("flex items-center gap-2 px-4 py-2.5 text-sm font-medium", open && "border-b border-border")}>
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <Icon name="lobu/inbox" className="size-4 text-muted-foreground" />
+          Waiting for review from archived threads
+          <span className="text-xs font-normal text-muted-foreground">
+            {formatCount(reviews.length)} · {open ? "hide" : "show"}
+          </span>
+        </button>
+        {!open || reviews.length < 2 ? null : (
           <button type="button" className="text-xs text-muted-foreground underline" onClick={() => void dismissAll()}>
             Dismiss all
           </button>
         )}
       </header>
-      <div className="divide-y divide-border px-4">
+      <div className={cn("divide-y divide-border px-4", !open && "hidden")}>
         {saved === null ? null : <p className="py-2 text-sm text-muted-foreground">{saved}</p>}
         {error === null ? null : (
           <p role="alert" className="py-2 text-sm text-destructive">
@@ -365,6 +362,56 @@ function PendingReviews() {
         ))}
       </div>
     </section>
+  );
+}
+
+const TAB_KEY = "lobu.dashboard.tab";
+type Tab = "workspaces" | "memory";
+
+function readTab(): Tab {
+  try {
+    return localStorage.getItem(TAB_KEY) === "memory" ? "memory" : "workspaces";
+  } catch {
+    return "workspaces";
+  }
+}
+
+/** The page's two views, remembered across visits. */
+function useTab() {
+  const [tab, setTab] = useState<Tab>(readTab);
+  const choose = (next: Tab) => {
+    setTab(next);
+    try {
+      localStorage.setItem(TAB_KEY, next);
+    } catch {
+      // Storage can be unavailable; the choice then lasts for this visit.
+    }
+  };
+  return [tab, choose] as const;
+}
+
+function Tabs({ tab, onChoose, waiting }: { tab: Tab; onChoose: (tab: Tab) => void; waiting: number }) {
+  const item = (id: Tab, label: string, icon: string, badge: number) => (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={tab === id}
+      onClick={() => onChoose(id)}
+      className={cn(
+        "flex items-center gap-1.5 rounded-md px-3 py-1 text-sm transition-colors",
+        tab === id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <Icon name={icon} className="size-3.5" />
+      {label}
+      {badge > 0 ? <span className="rounded-full bg-destructive/10 px-1.5 text-xs text-destructive">{formatCount(badge)}</span> : null}
+    </button>
+  );
+  return (
+    <div role="tablist" aria-label="Lobu views" className="inline-flex gap-0.5 rounded-lg bg-muted p-0.5">
+      {item("workspaces", "Workspaces", "lobu/inbox", waiting)}
+      {item("memory", "Memory", "lobu/memory", 0)}
+    </div>
   );
 }
 
@@ -438,15 +485,17 @@ export function DashboardPage() {
     ...all.filter((w) => w.error !== null).map((w) => `${w.slug}: ${w.error}`),
   ];
   const devices = snapshot?.devices ?? [];
+  const [tab, setTab] = useTab();
   return (
     <div className="h-full min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto box-border w-full max-w-3xl space-y-4 px-4 pb-6 pt-3 md:px-5 md:pt-4">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <Tabs tab={tab} onChoose={setTab} waiting={total(all, (w) => countOf(w.needsYou))} />
+          <span className="ml-auto text-xs">
             {all.length} workspace{all.length === 1 ? "" : "s"}
             {snapshot === null ? null : ` · updated ${relativeTime(snapshot.fetchedAt)}`}
           </span>
-          <Button variant="ghost" size="sm" className="ml-auto" onClick={refresh} disabled={loading}>
+          <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
             <Icon name="lobu/refresh" className={cn("size-4", loading && "animate-spin")} />
             Refresh
           </Button>
@@ -457,16 +506,16 @@ export function DashboardPage() {
           </p>
         )}
         {snapshot?.setup ? <SetupCard setup={snapshot.setup} /> : null}
-        {all.length > 1 ? <WorkspaceChips workspaces={all} active={active} onChoose={choose} /> : null}
-        <PendingReviews />
-        {problems.length === 0 ? null : (
+        {tab === "memory" ? <MemoryTab reviews={<PendingReviews />} /> : null}
+        {tab === "memory" ? null : all.length > 1 ? <WorkspaceChips workspaces={all} active={active} onChoose={choose} /> : null}
+        {tab === "memory" || problems.length === 0 ? null : (
           <ul className="space-y-1 rounded-lg border border-destructive/40 px-4 py-3 text-xs text-destructive">
             {problems.map((problem) => (
               <li key={problem}>{problem}</li>
             ))}
           </ul>
         )}
-        {snapshot === null ? (
+        {tab === "memory" ? null : snapshot === null ? (
           <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
             Loading Lobu…
           </div>

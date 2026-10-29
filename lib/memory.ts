@@ -9,7 +9,7 @@ const TITLE_MAX = 80;
 
 export interface SaveOutcome {
   workspace: string;
-  saved: { title: string; url: string | null }[];
+  saved: { eventId: number; title: string; url: string | null }[];
   failed: { title: string; error: string }[];
 }
 
@@ -62,8 +62,14 @@ export function pickWorkspaceWithHints(
   };
 }
 
+/** Lobu returns view links relative to its URL on some routes. */
+export function absoluteUrl(viewUrl: string | null, baseUrl: string): string | null {
+  if (viewUrl === null) return null;
+  return viewUrl.startsWith("http") ? viewUrl : baseUrl + viewUrl;
+}
+
 /** Same thread, workspace, and text saves once, even if the form is submitted twice. */
-export function idempotencyKey(threadId: string, workspace: string, memory: MemoryDraft): string {
+export function idempotencyKey(threadId: string, workspace: string, memory: Pick<MemoryDraft, "title" | "content">): string {
   const digest = createHash("sha256").update(`${threadId}\n${workspace}\n${memory.title}\n${memory.content}`).digest("hex");
   return `bb-plugin-lobu:${digest}`;
 }
@@ -85,8 +91,7 @@ export async function saveMemories(
           semantic_type: memory.kind,
           idempotency_key: idempotencyKey(threadId, workspace, memory),
         });
-        const url = saved.viewUrl === null ? null : saved.viewUrl.startsWith("http") ? saved.viewUrl : baseUrl + saved.viewUrl;
-        return { ok: true as const, title: memory.title, url };
+        return { ok: true as const, eventId: saved.id, title: memory.title, url: absoluteUrl(saved.viewUrl, baseUrl) };
       } catch (cause) {
         return { ok: false as const, title: memory.title, error: cause instanceof Error ? cause.message : String(cause) };
       }
@@ -94,7 +99,7 @@ export async function saveMemories(
   );
   return {
     workspace,
-    saved: results.filter((r) => r.ok).map(({ title, url }) => ({ title, url })),
+    saved: results.filter((r) => r.ok).map(({ eventId, title, url }) => ({ eventId, title, url })),
     failed: results.filter((r) => !r.ok).map(({ title, error }) => ({ title, error })),
   };
 }

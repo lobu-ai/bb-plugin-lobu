@@ -31,52 +31,58 @@ bb's New thread screen with a prompt about it; you pick the project and send.
 A one-line summary also appears on the New thread screen when something needs
 you.
 
-## Save to Lobu
+## Memory
 
-Agents in bb forget everything when a thread ends. Save to Lobu keeps the
-useful parts in your Lobu workspace memory, where any agent connected to Lobu
-can find them later with `search_memory`.
+Agents in bb forget everything when a thread ends. The plugin keeps the
+useful parts in your Lobu memory and hands them back to the next thread, so
+a gotcha found once is not rediscovered every week.
 
-![The agent proposed two memories after being asked to remember them; the user reviews them before saving](docs/screenshots/save-to-lobu.jpg)
+It works as a loop:
 
-Nothing is saved until you review it. A form takes the place of the message
-box: untick what you don't want, edit the wording, pick the kind (fact,
-decision, preference, observation, or note) and the workspace, then choose
-**Save**. Each proposal carries the evidence quote it came from, shown under
-the text. **Skip** saves nothing. Afterwards the thread shows what was saved,
-with links to each memory in Lobu.
+- **Threads start with their project's brief.** Every new thread gets a short
+  section with what you pinned to its bb project and what earlier threads
+  there learned, most used first. It stays under bb's 4,096-character limit
+  for plugin instructions.
+- **Agents search before they work.** A `lobu_search` tool searches your
+  personal workspace and the Lobu workspace you linked to the project. Only
+  saved memories come back, not browser history or other connector content.
+- **Agents save what they learn.** A `lobu_remember` tool saves decisions,
+  non-obvious facts, and standing preferences, at most three at a time and
+  each with an evidence quote. With **Save memories automatically** on (the
+  default), they go straight to your personal workspace, and anything Lobu
+  already holds is skipped. With it off, a review form opens first.
 
-There are three ways to get there:
+You see all of it in two places:
 
-- **The agent offers.** Agents get a `lobu_remember` tool and are asked to use
-  it when a task leaves something worth keeping, proposing up to three short
-  memories at the end of the task. For example, after fixing a flaky deploy it might propose
-  "Staging deploys need the office VPN". Most tasks contain nothing worth
-  keeping, and then the agent proposes nothing.
-- **Save a message.** Hover any message and choose **Save to Lobu**, or
-  highlight part of an answer and pick **Save to Lobu** from the selection
-  menu. The form opens with that text, so "remember this" is two clicks.
-- **Ask for a recap.** Choose **Save learnings to Lobu** from the thread's ⋯
-  menu. The agent looks back over the thread and proposes what is worth
-  keeping.
-- **Recap on archive.** Turn on **Recap archived threads** in the settings.
-  When you archive a thread, a hidden agent reads it and proposes memories.
-  Threads need a real back-and-forth to qualify, and ones ending in diffs or
-  status dumps are skipped. Nobody is looking at an archived thread, so the proposals wait in a
-  **Memories to review** card at the top of the Lobu page, in the same form,
-  until you save or skip them. Unreviewed recaps are dropped after a week.
-  Each recap is one agent turn; set **Recap provider** and **Recap model** to
-  a small, cheap model.
+- **The thread's Lobu memory panel.** Open it from the side panel's new-tab
+  menu. It shows what the thread started with, what the agent looked up, and
+  what it saved. Every saved memory can be undone, moved to another
+  workspace, or pinned to the project. When the agent thinks a memory is team
+  knowledge, the panel offers to move it there.
+- **The Memory tab of the Lobu page.** It counts what was saved, how many
+  memories agents have found since, and how often. It lists recent saves
+  with the same actions, and every bb project with its linked workspace, its
+  pins, a box to add a note every new thread should know, a search to pin
+  existing memories, and the exact brief its threads start with.
 
-The workspace defaults to the last one you saved to, or your personal
-workspace the first time. When the drafts agree on a workspace, that one is
-preselected instead, and the form says so. Saving the same memory twice from one thread stores it once.
-It works with any agent bb runs. Agents that cannot wait on a tool call, such
-as opencode, end their turn while the form is open and receive the result as
-a follow-up message once you save or skip.
-Agents pick up the `lobu_remember` tool when their session starts, so threads
-that were already open before you installed the plugin need a new thread
-first.
+Undo hides the memory with Lobu's own delete, which keeps it recoverable in
+Lobu. Moving saves a copy to the target workspace and hides the original.
+
+You can still save by hand. Hover any message and choose **Save to Lobu**, or
+highlight part of an answer and pick **Save to Lobu** from the selection
+menu; a review form opens with that text. **Save learnings to Lobu** in the
+thread's ⋯ menu asks the agent to look back over the thread.
+
+![The review form, with two memories proposed from a thread](docs/screenshots/save-to-lobu.jpg)
+
+**Recap archived threads**, off by default, has a hidden agent read each
+thread you archive. Its memories are saved like any other when auto-save is
+on, and otherwise wait on the Memory tab for review. Each recap is one agent
+turn; set **Recap provider** and **Recap model** to a small, cheap model.
+
+Agents pick up new tools and the brief when their session starts, so threads
+that were already open before you installed or updated the plugin need a new
+thread first.
 
 ## Requirements
 
@@ -105,8 +111,10 @@ makes one read-only `query_sdk` call per workspace. The summary is computed
 inside Lobu, so only the rows the page shows come back. Results are cached for
 a minute and the page refreshes every two minutes.
 
-The only write is Save to Lobu, which calls Lobu's own `save_memory` for each
-memory you approve in the form. Recaps read the archived thread through bb's
+Memory writes use Lobu's own tools: `save_memory` to save, and `run_sdk` with
+`knowledge.delete` to undo or to hide the original after a move. Searches use
+`search_memory`. What the plugin saved, project links, pins, and each
+thread's log stay in the plugin's bb storage. Recaps read the archived thread through bb's
 own thread API and keep their proposals in the plugin's bb storage until you
 review them. Tokens stay in the bb server process; the page
 only receives summaries and the form's contents.
@@ -121,7 +129,8 @@ Open them in bb under Settings → Plugins → Lobu, or use `bb plugin config lo
 | `metrics` | `[]` | JSON array of metric queries, for example `[{"workspace":"acme","entity_type":"company","measure":"spend","by":["month"],"label":"Spend by month"}]`. |
 | `baseUrl` | `https://app.lobu.ai` | Change only for a self-hosted Lobu. |
 | `lobuBin` | empty | Path to the `lobu` CLI. Empty tries `~/.bun/bin/lobu`, then `lobu` on your login shell's `PATH`. |
-| `recapOnArchive` | `false` | Recap threads when you archive them. The proposals wait on the Lobu page for review. |
+| `autoSave` | `true` | Save what agents learn to your personal workspace without asking. Off opens a review form for every save. |
+| `recapOnArchive` | `false` | Recap threads when you archive them, saved like other memories when auto-save is on, otherwise queued for review. |
 | `recapProvider` | empty | Provider id for recaps, such as `acp-opencode`. Empty uses the archived thread's provider. |
 | `recapModel` | empty | Model for recaps. Empty uses the provider's default. |
 

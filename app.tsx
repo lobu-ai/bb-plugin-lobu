@@ -7,6 +7,7 @@ import {
   useSdk,
 } from "@get-bb/plugin-sdk/app";
 import { DashboardPage, NeedsYouStrip } from "@/components/dashboard";
+import { ThreadMemoryPanel } from "@/components/memory";
 import { RememberFormView } from "@/components/remember-form";
 import { learnResultSchema, REMEMBER_RENDERER, rememberResultSchema } from "@/lib/memory-contract";
 
@@ -39,6 +40,14 @@ export default definePluginApp((app) => {
     id: "needs-you",
     title: "Lobu",
     component: NeedsYouStrip,
+  });
+
+  // What this thread started with, looked up, and saved, with undo, move, and pin.
+  app.slots.threadPanelAction({
+    id: "memory",
+    title: "Lobu memory",
+    icon: "lobu/memory",
+    component: ThreadMemoryPanel,
   });
 
   // The review form shown in place of the composer.

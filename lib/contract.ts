@@ -3,10 +3,16 @@ import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
   learnResultSchema,
+  memoryHitSchema,
+  memoryOverviewSchema,
   pendingReviewSchema,
+  pinInputSchema,
+  projectMemorySchema,
   rememberResultSchema,
   rememberSubmissionSchema,
+  savedRecordSchema,
   savedSummarySchema,
+  threadMemorySchema,
 } from "./memory-contract";
 
 const itemSchema = z.object({
@@ -108,5 +114,48 @@ export const rpcContract = defineRpcContract({
   dismissPendingReview: {
     input: z.object({ id: z.string() }),
     output: z.object({ dismissed: z.boolean() }),
+  },
+  /** Memories the plugin saved, every bb project's Lobu link, pins, and brief. */
+  memoryOverview: {
+    input: z.object({}),
+    output: memoryOverviewSchema,
+  },
+  /** What one thread was given at its start, searched for, and saved. */
+  threadMemory: {
+    input: z.object({ threadId: z.string() }),
+    output: threadMemorySchema,
+  },
+  /** Hides a saved memory in Lobu (recoverable there) and drops it from the plugin's list and pins. */
+  undoMemory: {
+    input: z.object({ eventId: z.number() }),
+    output: z.object({ removed: z.boolean() }),
+  },
+  /** Saves a memory to another workspace, then hides the original. */
+  moveMemory: {
+    input: z.object({ eventId: z.number(), workspace: z.string().min(1) }),
+    output: savedRecordSchema,
+  },
+  pinMemory: {
+    input: z.object({ projectId: z.string(), item: pinInputSchema }),
+    output: projectMemorySchema,
+  },
+  unpinMemory: {
+    input: z.object({ projectId: z.string(), pinnedAt: z.number() }),
+    output: projectMemorySchema,
+  },
+  /** Saves a note to the personal workspace and pins it to the project. */
+  addNote: {
+    input: z.object({ projectId: z.string(), text: z.string().trim().min(1).max(2000) }),
+    output: projectMemorySchema,
+  },
+  /** Links a bb project to a Lobu workspace, or unlinks it with null. */
+  linkProject: {
+    input: z.object({ projectId: z.string(), workspace: z.string().min(1).nullable() }),
+    output: projectMemorySchema,
+  },
+  /** Searches the personal workspace and the project's linked one. Not counted as an agent use. */
+  searchMemory: {
+    input: z.object({ projectId: z.string().nullable(), query: z.string().trim().min(2).max(300) }),
+    output: z.array(memoryHitSchema),
   },
 });
