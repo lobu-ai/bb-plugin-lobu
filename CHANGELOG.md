@@ -20,6 +20,10 @@
   composer starts with, and opens the project's pins, notes, and linked
   workspace. A pinned memory leads the brief once instead of also appearing
   among what was learned.
+- Without a Lobu connection, threads still start with the project's saved
+  brief, and the New thread screen shows it under the setup card. The
+  `lobu_search` and `lobu_remember` tools tell the agent Lobu is not
+  connected and to continue without it, instead of returning an error.
 - Requests to a Lobu on this machine wait up to two minutes, since a new
   local Lobu loads its search model on the first search.
 - **Open what bb saved in Lobu**, in the thread's ⋯ menu and the Lobu memory

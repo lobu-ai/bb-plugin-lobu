@@ -74,6 +74,8 @@ const CLOUD_CONTEXT = "lobu";
 /** Plugin storage key for the CLI context bb uses. */
 const LOGIN_KEY = "login";
 const SETUP_HINT = "Connect Lobu from the card on bb's New thread screen, or under Settings → Plugins → Lobu.";
+/** What agents hear while Lobu is not connected; the user sees the setup card on the New thread screen instead. */
+const NOT_CONNECTED = "Lobu is not connected, so its memory is unavailable. Continue without it.";
 
 const LEARN_PROMPT =
   "Look back over this thread and call lobu_remember with the learnings worth keeping across sessions: decisions, non-obvious facts or gotchas, and preferences I stated as standing rules. Most threads contain nothing worth keeping; if so, say so instead of calling the tool. Never propose what this thread built or changed, anything the repo or code already states, generic quality wishes, or task requirements restated as preferences. At most three short, self-contained memories, each with a short evidence quote of the turn or finding it came from. Skip anything temporary, obvious from the code, already saved to Lobu, or sensitive.";
@@ -336,10 +338,10 @@ export default async function plugin(bb: BbPluginApi) {
     return lines.join("\n");
   }
 
-  /** A tool failure for the agent; a missing CLI or login also says where the user fixes it. */
-  function toolError(cause: unknown): string {
-    const message = cause instanceof Error ? cause.message : String(cause);
-    return cause instanceof LobuSetupError ? `${message} ${SETUP_HINT}` : message;
+  /** A tool failure for the agent; a missing CLI or login is not one, as threads work without Lobu. */
+  function toolFailure(cause: unknown) {
+    if (cause instanceof LobuSetupError) return NOT_CONNECTED;
+    return { content: [{ type: "text" as const, text: cause instanceof Error ? cause.message : String(cause) }], isError: true };
   }
 
   // Every thread starts with its project's brief: pins, then what earlier threads learned.
@@ -545,9 +547,10 @@ export default async function plugin(bb: BbPluginApi) {
         }
         // Nobody reviews a form in a hidden recap thread.
         if (source !== null) return 'Nothing was saved: auto-save is off or no personal Lobu workspace is reachable. Reply with exactly: "Nothing saved."';
+        if ((await memoryOwners()).size === 0) return NOT_CONNECTED;
         return outcomeForAgent(await review(threadId, memories, signal));
       } catch (cause) {
-        return { content: [{ type: "text", text: toolError(cause) }], isError: true };
+        return toolFailure(cause);
       }
     },
   });
@@ -568,6 +571,7 @@ export default async function plugin(bb: BbPluginApi) {
     }),
     async execute({ query, limit }, { threadId, projectId }) {
       try {
+        if ((await memoryOwners()).size === 0) return NOT_CONNECTED;
         const hits = await searchLobu(projectId, query, limit ?? 5);
         const now = Date.now();
         memory.logs = capThreadLogs({ ...memory.logs, [threadId]: addSearch(memory.logs[threadId], { query, at: now, results: hits }) });
@@ -586,7 +590,7 @@ export default async function plugin(bb: BbPluginApi) {
           })
           .join("\n");
       } catch (cause) {
-        return { content: [{ type: "text", text: toolError(cause) }], isError: true };
+        return toolFailure(cause);
       }
     },
   });

@@ -18,6 +18,11 @@ export function LobuHome() {
   const { status, reload } = useSetupStatus();
   const projectId = useNewThreadProject();
   if (status === null) return null;
-  if (!isConnected(status)) return <SetupCard status={status} reload={reload} />;
-  return projectId === null ? null : <ProjectBrief projectId={projectId} />;
+  // Threads start with the project's brief even while Lobu is not connected, so it shows here too.
+  return (
+    <div className="space-y-3">
+      {isConnected(status) ? null : <SetupCard status={status} reload={reload} />}
+      {projectId === null ? null : <ProjectBrief projectId={projectId} />}
+    </div>
+  );
 }

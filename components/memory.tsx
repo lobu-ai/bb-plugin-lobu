@@ -439,6 +439,8 @@ export function ProjectBrief({ projectId }: { projectId: string }) {
     project.pins.length === 0 ? null : `${project.pins.length} pinned`,
     project.learned.length === 0 ? null : `${project.learned.length} learned in earlier threads`,
   ].filter((part) => part !== null);
+  // Not connected and nothing to start with: the setup card says all there is.
+  if (view.personal === null && parts.length === 0) return null;
   return (
     <section className="space-y-1 rounded-lg border border-border px-4 py-2">
       <div className="flex items-center justify-between gap-2">

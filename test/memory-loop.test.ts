@@ -121,6 +121,7 @@ beforeAll(() => {
     cli,
     [
       "#!/bin/sh",
+      `if [ "$1" = whoami ] && [ -e "${join(root, "signed-out")}" ]; then echo '{"loggedIn":false,"local":false,"organizations":[]}'; exit 0; fi`,
       `if [ "$1" = whoami ]; then echo '${whoami}'; exit 0; fi`,
       'if [ "$1" = --version ]; then echo 24.2.0; exit 0; fi',
       `if [ "$1" = context ] && [ "$2" = list ]; then echo '${contexts}'; exit 0; fi`,
@@ -312,5 +313,18 @@ describe("the memory loop", () => {
     expect(formRequests).toHaveLength(1);
     expect(result).toContain("chose not to save");
     expect(lobu.memories).toHaveLength(before);
+  });
+
+  test("signed out, the agent's Lobu tools say so quietly instead of failing", async () => {
+    const marker = join(root, "signed-out");
+    writeFileSync(marker, "");
+    try {
+      const { call } = await startPlugin();
+      const notConnected = "Lobu is not connected, so its memory is unavailable. Continue without it.";
+      expect(await call("lobu_search", { query: "staging deploy vpn" }, "thread-10")).toBe(notConnected);
+      expect(await call("lobu_remember", { memories: [prPreference] }, "thread-10")).toBe(notConnected);
+    } finally {
+      rmSync(marker);
+    }
   });
 });
