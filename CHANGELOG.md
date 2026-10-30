@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - Setup is built in. A **Connect Lobu memory** card on the New thread screen
   installs or updates the Lobu CLI with bun or npm (showing the command when
