@@ -1,6 +1,7 @@
 // Builds one dashboard snapshot across every workspace the configured logins cover.
 import type { DashboardItem, MetricPin, Snapshot, WorkspaceSummary } from "./contract";
-import { LobuSetupError, type LobuApi } from "./lobu-api";
+import { LobuSetupError } from "./cli";
+import type { LobuApi } from "./lobu-api";
 import { LOBU_SCRIPTS_SOURCE } from "./lobu-scripts.generated";
 import type { RawDevice, RawItem, RawWorkspaceSummary, SummaryOptions } from "./workspace-summary";
 

@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { rememberSubmissionSchema } from "../lib/memory-contract";
+import { rememberSubmissionSchema, memoryDraftSchema, memoryProposalSchema } from "../lib/memory-contract";
 import type { LobuApi, SaveMemoryInput } from "../lib/lobu-api";
 import {
   describeOutcome,
   draftFromText,
   idempotencyKey,
+  matchWorkspaceHint,
   outcomeForAgent,
   pickWorkspace,
+  pickWorkspaceWithHints,
   saveMemories,
 } from "../lib/memory";
 import type { WorkspaceOwner } from "../lib/snapshot";
@@ -58,6 +60,43 @@ describe("pickWorkspace", () => {
     expect(pickWorkspace(owners, "gone")).toBe("me");
     expect(pickWorkspace(new Map([["acme", owner()]]), null)).toBe("acme");
     expect(pickWorkspace(new Map(), null)).toBeNull();
+  });
+});
+
+describe("workspace hints", () => {
+  const owners = new Map([
+    ["acme", owner({ name: "Acme Corp" })],
+    ["me", owner({ personal: true })],
+  ]);
+  test("matches by slug, then case-insensitive name", () => {
+    expect(matchWorkspaceHint(owners, "acme")).toBe("acme");
+    expect(matchWorkspaceHint(owners, "acme corp")).toBe("acme");
+    expect(matchWorkspaceHint(owners, "ME")).toBe("me");
+    expect(matchWorkspaceHint(owners, "unknown")).toBeNull();
+    expect(matchWorkspaceHint(owners, null)).toBeNull();
+    expect(matchWorkspaceHint(owners, "  ")).toBeNull();
+  });
+  test("a unanimous hint wins; disagreement falls back with a note", () => {
+    expect(pickWorkspaceWithHints(owners, "me", ["acme", null])).toEqual({ workspace: "acme", note: null });
+    expect(pickWorkspaceWithHints(owners, null, [null, undefined])).toEqual({ workspace: "me", note: null });
+    expect(pickWorkspaceWithHints(owners, null, ["acme", "me"])).toEqual({
+      workspace: "me",
+      note: "Drafts suggest different workspaces (acme, me); check before saving.",
+    });
+    expect(pickWorkspaceWithHints(owners, null, ["unknown"])).toEqual({ workspace: "me", note: null });
+  });
+});
+
+describe("proposal schemas", () => {
+  const legacy = { title: "Staging needs VPN", content: "Staging deploys need the office VPN.", kind: "fact" as const };
+  test("older drafts without evidence or workspace still parse", () => {
+    expect(memoryDraftSchema.safeParse(legacy).success).toBe(true);
+  });
+  test("new proposals require evidence", () => {
+    expect(memoryProposalSchema.safeParse(legacy).success).toBe(false);
+    expect(
+      memoryProposalSchema.safeParse({ ...legacy, evidence: "User: staging fails on office wifi" }).success,
+    ).toBe(true);
   });
 });
 

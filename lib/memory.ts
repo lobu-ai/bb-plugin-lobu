@@ -32,6 +32,36 @@ export function pickWorkspace(owners: Map<string, WorkspaceOwner>, preferred: st
   return owners.keys().next().value ?? null;
 }
 
+/** A draft's workspace hint matched to a granted workspace, by slug then case-insensitive name. */
+export function matchWorkspaceHint(owners: Map<string, WorkspaceOwner>, hint: string | null | undefined): string | null {
+  if (hint === null || hint === undefined) return null;
+  const text = hint.trim();
+  if (text === "") return null;
+  if (owners.has(text)) return text;
+  const lower = text.toLowerCase();
+  for (const [slug, owner] of owners) {
+    if (slug.toLowerCase() === lower || owner.name.toLowerCase() === lower) return slug;
+  }
+  return null;
+}
+
+/** A unanimous valid hint wins; otherwise the remembered choice, with a note when hints disagree. */
+export function pickWorkspaceWithHints(
+  owners: Map<string, WorkspaceOwner>,
+  preferred: string | null,
+  hints: readonly (string | null | undefined)[],
+): { workspace: string | null; note: string | null } {
+  const matched = hints.map((hint) => matchWorkspaceHint(owners, hint));
+  const distinct = [...new Set(matched.filter((slug): slug is string => slug !== null))];
+  if (distinct.length === 1) return { workspace: distinct[0], note: null };
+  const workspace = pickWorkspace(owners, preferred);
+  if (distinct.length === 0) return { workspace, note: null };
+  return {
+    workspace,
+    note: `Drafts suggest different workspaces (${distinct.sort().join(", ")}); check before saving.`,
+  };
+}
+
 /** Same thread, workspace, and text saves once, even if the form is submitted twice. */
 export function idempotencyKey(threadId: string, workspace: string, memory: MemoryDraft): string {
   const digest = createHash("sha256").update(`${threadId}\n${workspace}\n${memory.title}\n${memory.content}`).digest("hex");

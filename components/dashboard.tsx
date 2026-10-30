@@ -260,6 +260,11 @@ function SetupCard({ setup }: { setup: NonNullable<Snapshot["setup"]> }) {
           Install the CLI with <Command>npm install -g @lobu/cli</Command>, then run <Command>lobu login</Command>.
           If it lives somewhere unusual, set its path in this plugin's settings.
         </p>
+      ) : setup.code === "cli_failed" ? (
+        <p>
+          The CLI runs with the PATH your login shell sets up, so it needs <Command>node</Command> there. Check that{" "}
+          <Command>lobu whoami</Command> works in a terminal, or set the CLI's full path in this plugin's settings.
+        </p>
       ) : setup.code === "not_logged_in" ? (
         <p>
           {setup.context === null ? null : (
@@ -299,12 +304,26 @@ function PendingReviews() {
   }, [load]);
   if (reviews.length === 0 && saved === null && error === null) return null;
   const done = (id: string) => setReviews((current) => current.filter((review) => review.id !== id));
+  const dismissAll = async () => {
+    try {
+      await Promise.all(reviews.map((review) => rpc.call("dismissPendingReview", { id: review.id })));
+      setReviews([]);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
   return (
     <section className="rounded-lg border border-border bg-card">
       <header className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-sm font-medium">
         <Icon name="lobu/lobu" className="size-4 text-muted-foreground" />
         Memories to review
         <span className="ml-auto text-xs text-muted-foreground">{formatCount(reviews.length)}</span>
+        {reviews.length < 2 ? null : (
+          <button type="button" className="text-xs text-muted-foreground underline" onClick={() => void dismissAll()}>
+            Dismiss all
+          </button>
+        )}
       </header>
       <div className="divide-y divide-border px-4">
         {saved === null ? null : <p className="py-2 text-sm text-muted-foreground">{saved}</p>}
@@ -320,6 +339,11 @@ function PendingReviews() {
               {" · "}
               {relativeTime(new Date(review.createdAt).toISOString())}
             </p>
+            {review.firstMessage === null ? null : (
+              <p className="text-xs text-muted-foreground">
+                Started with: <span className="italic">{review.firstMessage}</span>
+              </p>
+            )}
             <RememberFields
               form={review.form}
               onSave={async (submission) => {

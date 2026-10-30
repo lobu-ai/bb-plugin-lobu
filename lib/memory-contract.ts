@@ -10,18 +10,30 @@ export const memoryDraftSchema = z.object({
   title: z.string().trim().min(1).max(120),
   content: z.string().trim().min(1).max(2000),
   kind: z.enum(memoryKinds),
+  /** Short quote of the user turn or agent finding the memory came from. Absent on older queued drafts. */
+  evidence: z.string().trim().max(500).nullish(),
+  /** Workspace slug or name the memory belongs to; null lets the server pick. Absent on older queued drafts. */
+  workspace: z.string().trim().min(1).nullish(),
 });
 export type MemoryDraft = z.infer<typeof memoryDraftSchema>;
 
-/** What the review form shows. */
+/** What agents must send: evidence is required, so invented preferences fail validation. */
+export const memoryProposalSchema = memoryDraftSchema.extend({
+  evidence: z.string().trim().min(1).max(500),
+});
+export type MemoryProposal = z.infer<typeof memoryProposalSchema>;
+
+/** What the review form shows. Drafts stay capped at ten so recaps queued by older tool versions still parse. */
 export const rememberFormSchema = z.object({
   drafts: z.array(memoryDraftSchema).min(1).max(10),
   workspaces: z.array(z.object({ slug: z.string(), name: z.string() })),
   workspace: z.string().nullable(),
+  /** Why this workspace is preselected, e.g. draft hints disagreeing; null when unremarkable. */
+  workspaceNote: z.string().nullable(),
 });
 export type RememberForm = z.infer<typeof rememberFormSchema>;
 
-/** What the review form submits: only the memories the user kept, as edited. */
+/** What the review form submits: only the memories the user kept, as edited. The cap stays above the tool's so a kept subset always validates. */
 export const rememberSubmissionSchema = z.object({
   workspace: z.string().min(1),
   memories: z.array(memoryDraftSchema).max(10),
@@ -36,6 +48,7 @@ export const pendingReviewSchema = z.object({
   id: z.string(),
   sourceTitle: z.string(),
   createdAt: z.number(),
+  firstMessage: z.string().nullable(),
   form: rememberFormSchema,
 });
 export type PendingReview = z.infer<typeof pendingReviewSchema>;

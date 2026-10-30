@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- The plugin runs the `lobu` CLI with your login shell's `PATH`. bb opened
+  from the Dock only sees launchd's minimal `PATH`, so a CLI that needs a
+  Homebrew, nvm, or Bun `node` failed to start and the Lobu page wrongly
+  asked you to log in.
+- A CLI that cannot run now gets its own setup step showing the CLI's error,
+  instead of being reported as a missing login.
+
+## 0.4.1
+
+- Tighter proposal bar: agents propose up to three memories and only when a
+  different agent next month would act differently; "nothing to keep" is the
+  expected answer. Each proposal carries an evidence quote shown in the
+  review form, and proposals without one fail validation.
+- Drafts can name their Lobu workspace; a unanimous hint preselects it in
+  the form, and disagreement is flagged before saving.
+- Archive recaps need a real back-and-forth (three user turns) and skip
+  threads ending in diffs or status dumps; long transcripts keep the opening
+  as well as the ending. Queued recaps show the archived thread's opening
+  message, and the review card gains a dismiss-all button.
+
 ## 0.4.0
 
 - Every `lobu` CLI login on your Lobu is read, so all the workspaces you

@@ -51,7 +51,7 @@ const workspaceSchema = z.object({
 });
 export type WorkspaceSummary = z.infer<typeof workspaceSchema>;
 
-export const setupCodes = ["cli_missing", "not_logged_in", "no_workspaces"] as const;
+export const setupCodes = ["cli_missing", "cli_failed", "not_logged_in", "no_workspaces"] as const;
 export type SetupCode = (typeof setupCodes)[number];
 
 const snapshotSchema = z.object({
