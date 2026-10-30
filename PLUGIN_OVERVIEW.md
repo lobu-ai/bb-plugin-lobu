@@ -1,24 +1,27 @@
-See what needs you across your Lobu workspaces without leaving bb.
+Keep what your agents learn in Lobu memory, without leaving bb.
 
 ## What you get
 
-- A **Lobu** page in the sidebar: pending approvals and due Automations,
-  failed Automation and feed runs, connections and devices that need
-  attention, the last 24 hours of activity, and pinned metrics.
-- An **Ask an agent** action on each row that opens New thread with a prompt
-  about it.
-- A one-line summary on the New thread screen when something needs you.
-- **Save to Lobu**: agents propose what they learned, or you save any message,
-  and a review form lets you edit and choose before anything reaches Lobu
-  memory. Optionally, archived threads are recapped and their proposals wait
-  on the Lobu page for review.
+- Threads start with their project's Lobu brief, agents search Lobu before
+  they work, and what they learn is saved to your personal Lobu workspace —
+  with undo, pin, and one-click sharing to a linked team workspace in each
+  thread's Lobu memory panel.
+- Agents can supersede outdated memories in place, and edits or deletes made in
+  Lobu sync back into your project brief.
+- Works across every agent provider in bb: native `lobu_search` and
+  `lobu_remember` tools plus `bb lobu search` and `bb lobu remember` CLI
+  commands for ACP providers.
+- **Save to Lobu** on any message, and **Save learnings to Lobu** for a whole
+  thread, through a review form.
+- **Open what bb saved in Lobu** opens Lobu's own page of those memories.
+
+## Getting started
+
+A card on the New thread screen installs the Lobu CLI with bun or npm, then,
+as in the Lobu Mac app, signs you in to Lobu Cloud or runs Lobu on this
+machine. Settings → Plugins → Lobu shows which Lobu bb uses and what it
+saved there, and switches between them.
 
 ## How it works
 
-The plugin reuses your `lobu` CLI login and makes one read-only call per
-workspace. Tokens stay in the bb server; the page only receives the summary.
-Its only write is Save to Lobu, which saves the memories you approve.
-
-## Requirements
-
-The Lobu CLI (`npm install -g @lobu/cli`), logged in with `lobu login`.
+The plugin uses your `lobu` CLI login. Tokens stay in the bb server.

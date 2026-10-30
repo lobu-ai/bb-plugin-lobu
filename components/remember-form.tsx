@@ -35,8 +35,8 @@ export function RememberFormView({ interaction, submit, cancel }: PluginPendingI
   return <RememberFields form={parsed.data} onSave={submit} onSkip={cancel} />;
 }
 
-/** Proposed memories to untick, edit, and save; shared by the thread form and the Lobu page. */
-export function RememberFields({
+/** Proposed memories to untick, edit, and save. */
+function RememberFields({
   form,
   onSave,
   onSkip,
@@ -144,6 +144,9 @@ export function RememberFields({
               )}
               {row.workspace === null || row.workspace === undefined || row.workspace === "" ? null : (
                 <p className="text-xs text-muted-foreground">Suggested workspace: {row.workspace}</p>
+              )}
+              {row.replacesEventId === null || row.replacesEventId === undefined ? null : (
+                <p className="text-xs text-muted-foreground">Replaces memory {row.replacesEventId}</p>
               )}
             </div>
           </li>

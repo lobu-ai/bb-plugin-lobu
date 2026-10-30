@@ -3,9 +3,11 @@
 import { z } from "zod";
 import { cliFailure, createCliRunner, LobuSetupError } from "./cli";
 
-/** How long a minted token is reused before asking the CLI again. */
-const TOKEN_TTL_MS = 5 * 60_000;
+/** How long a `lobu whoami` session is reused before asking the CLI again. */
+const SESSION_TTL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+/** A new Lobu on this machine loads its search model on the first search, which takes longer. */
+const LOCAL_REQUEST_TIMEOUT_MS = 120_000;
 
 export interface Workspace {
   slug: string;
@@ -20,6 +22,7 @@ export interface SaveMemoryInput {
   content: string;
   semantic_type: string;
   idempotency_key: string;
+  supersedes_event_id?: number;
 }
 
 export interface SavedMemory {
@@ -27,9 +30,52 @@ export interface SavedMemory {
   viewUrl: string | null;
 }
 
+/** A CLI login as `lobu whoami --json` reports it, the same source the Lobu Mac app reads. */
+export interface Session {
+  account: string | null;
+  /** The bearer token for Lobu's API; null when the login is signed out. */
+  token: string | null;
+  workspaces: Workspace[];
+}
+
+const whoamiSchema = z.object({
+  loggedIn: z.boolean(),
+  local: z.boolean(),
+  email: z.string().optional(),
+  accessToken: z.string().optional(),
+  workerToken: z.string().optional(),
+  orgSlug: z.string().optional(),
+  personalOrgSlug: z.string().optional(),
+  organizations: z.array(z.object({ slug: z.string(), name: z.string().optional() })),
+});
+
+/**
+ * Reads `lobu whoami --json --include-tokens`. A Lobu on this machine takes
+ * the worker token its `lobu run` minted, as in the Mac app; a remote Lobu
+ * takes the session's access token. As in the Mac app, a Lobu that names no
+ * personal workspace (a new local install lists none) saves to the login's own.
+ */
+export function parseWhoami(output: string): Session | null {
+  let parsed: z.infer<typeof whoamiSchema>;
+  try {
+    const result = whoamiSchema.safeParse(JSON.parse(output.trim().split("\n").pop() ?? ""));
+    if (!result.success) return null;
+    parsed = result.data;
+  } catch {
+    return null;
+  }
+  const token = parsed.local ? (parsed.workerToken ?? parsed.accessToken) : parsed.accessToken;
+  const personal = parsed.personalOrgSlug ?? parsed.orgSlug;
+  const listed = parsed.organizations.length > 0 || parsed.orgSlug === undefined ? parsed.organizations : [{ slug: parsed.orgSlug }];
+  return {
+    account: parsed.email ?? null,
+    token: parsed.loggedIn && token ? token : null,
+    workspaces: listed.map((org) => ({ slug: org.slug, name: org.name ?? org.slug, personal: org.slug === personal })),
+  };
+}
+
 export interface LobuApiOptions {
   baseUrl: string;
-  lobuBin: string;
 }
 
 const cliContextsSchema = z.object({
@@ -44,43 +90,64 @@ function originOf(url: string): string | null {
   }
 }
 
-/** Contexts with a login on this Lobu, the active one first, from `lobu context list --json`. */
-export function contextsForLobu(listed: unknown, baseUrl: string): string[] {
-  const parsed = cliContextsSchema.safeParse(listed);
-  if (!parsed.success) return [];
-  const origin = originOf(baseUrl);
-  return parsed.data.contexts
-    .filter((context) => context.loggedIn && origin !== null && originOf(context.url) === origin)
-    .sort((a, b) => Number(b.current) - Number(a.current))
-    .map((context) => context.name);
+/** A `lobu` CLI context and the Lobu origin it logs in to. */
+export interface CliContext {
+  name: string;
+  origin: string;
+  current: boolean;
+  loggedIn: boolean;
 }
 
-export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
-  const runLobu = createCliRunner(lobuBin);
-  const tokens = new Map<string, { value: string; mintedAt: number }>();
+/** Every context from `lobu context list --json`, the active one first. */
+export function parseCliContexts(listed: unknown): CliContext[] {
+  const parsed = cliContextsSchema.safeParse(listed);
+  if (!parsed.success) return [];
+  return parsed.data.contexts
+    .flatMap((context) => {
+      const origin = originOf(context.url);
+      return origin === null ? [] : [{ name: context.name, origin, current: context.current, loggedIn: context.loggedIn }];
+    })
+    .sort((a, b) => Number(b.current) - Number(a.current));
+}
+
+const isLoopback = (url: URL) => ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+
+/** Lobu origins the plugin talks to: HTTPS, or HTTP on this machine. */
+export function lobuOrigin(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || (parsed.protocol === "http:" && isLoopback(parsed)) ? parsed.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+export function createLobuApi({ baseUrl }: LobuApiOptions) {
+  const cli = createCliRunner();
+  const timeoutMs = isLoopback(new URL(baseUrl)) ? LOCAL_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+  const runLobu = cli.run;
+  const sessions = new Map<string, { session: Session; at: number }>();
   const contextLabel = (context: string | null) => context ?? "the active context";
 
-  async function token(context: string | null, fresh: boolean): Promise<string> {
+  /** The session `lobu whoami` reports for a context, reused for a few minutes. */
+  async function session(context: string | null, fresh: boolean): Promise<Session> {
     const key = context ?? "";
-    const hit = tokens.get(key);
-    if (!fresh && hit && Date.now() - hit.mintedAt < TOKEN_TTL_MS) return hit.value;
-    const args = ["token", "--raw", ...(context === null ? [] : ["--context", context])];
+    const hit = sessions.get(key);
+    if (!fresh && hit && Date.now() - hit.at < SESSION_TTL_MS) return hit.session;
+    const args = ["whoami", "--json", "--include-tokens", ...(context === null ? [] : ["--context", context])];
     let stdout: string;
     try {
       stdout = await runLobu(args);
     } catch (error) {
       throw cliFailure(error, context);
     }
-    const value = stdout.trim().split("\n").pop()?.trim() ?? "";
-    if (value.length < 20) {
-      throw new LobuSetupError(
-        "not_logged_in",
-        context,
-        `The lobu CLI has no login for ${contextLabel(context)}.`,
-      );
+    const parsed = parseWhoami(stdout);
+    if (parsed === null) throw new LobuSetupError("cli_failed", context, "lobu whoami printed something bb cannot read.");
+    if (parsed.token === null) {
+      throw new LobuSetupError("not_logged_in", context, `The lobu CLI has no login for ${contextLabel(context)}.`);
     }
-    tokens.set(key, { value, mintedAt: Date.now() });
-    return value;
+    sessions.set(key, { session: parsed, at: Date.now() });
+    return parsed;
   }
 
   async function request(context: string | null, path: string, body?: unknown): Promise<unknown> {
@@ -89,11 +156,11 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
       const response = await fetch(`${baseUrl}${path}`, {
         method: body === undefined ? "GET" : "POST",
         headers: {
-          Authorization: `Bearer ${await token(context, fresh)}`,
+          Authorization: `Bearer ${(await session(context, fresh)).token}`,
           "Content-Type": "application/json",
         },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (response.status === 401 && !fresh) continue;
       if (response.status === 401) {
@@ -110,32 +177,60 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
     throw new Error("unreachable");
   }
 
+  /** Who this CLI context is signed in as, and the workspaces it is authorized for. */
+  async function identity(context: string | null): Promise<Session> {
+    return session(context, true);
+  }
+
+  /** Every CLI context, the active one first; null when the CLI cannot list them as JSON. */
+  async function cliContexts(): Promise<CliContext[] | null> {
+    try {
+      const listed = parseCliContexts(JSON.parse(await runLobu(["context", "list", "--json"])));
+      return listed.length === 0 ? null : listed;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Starts `lobu login` for a context (null: the CLI's active one). The CLI
+   * opens Lobu's approval page for HTTPS and finishes once the user
+   * approves; returns the approval URL it printed.
+   */
+  function signIn(context: string | null): Promise<string | null> {
+    return cli.start(["login", ...(context === null ? [] : ["--context", context]), "--wait-for-approval"]);
+  }
+
   return {
+    cliContexts,
+
     /**
-     * Every CLI login on this Lobu, so each workspace the user authorized
-     * appears without configuration. Null when the CLI cannot list them
-     * (missing, or older than `context list --json`); callers then use the
-     * active context.
+     * Adds a CLI context for this Lobu and starts its login, which the CLI
+     * finishes once the user approves it in the browser (the CLI opens the
+     * page itself for HTTPS). Returns the approval URL it printed.
      */
-    async contexts(): Promise<string[] | null> {
+    async addContext(name: string, url: string): Promise<string | null> {
       try {
-        const names = contextsForLobu(JSON.parse(await runLobu(["context", "list", "--json"])), baseUrl);
-        return names.length === 0 ? null : names;
-      } catch {
-        return null;
+        // `--` keeps a name that starts with a dash from reading as an option.
+        await runLobu(["context", "add", "--url", url, "--", name]);
+      } catch (error) {
+        const failure = error as { code?: unknown; stderr?: unknown; stdout?: unknown };
+        if (failure.code === "ENOENT") throw cliFailure(error, name);
+        const detail = [failure.stderr, failure.stdout].map((text) => (typeof text === "string" ? text.trim() : "")).find((text) => text !== "");
+        throw new Error(detail ?? `lobu could not add the ${name} context.`);
       }
+      return signIn(name);
     },
 
-    /** Workspaces the login for this CLI context is authorized for. */
+    signIn,
+    identity,
+    cliState: cli.state,
+    installer: cli.installer,
+    installCli: cli.install,
+    serve: cli.serve,
+
     async workspaces(context: string | null): Promise<Workspace[]> {
-      const info = (await request(context, "/oauth/userinfo")) as {
-        organizations?: { slug: string; name?: string; personal?: boolean }[];
-      };
-      return (info.organizations ?? []).map((org) => ({
-        slug: org.slug,
-        name: org.name ?? org.slug,
-        personal: org.personal === true,
-      }));
+      return (await identity(context)).workspaces;
     },
 
     /** Saves one memory with Lobu's save_memory tool; returns the saved event. */
@@ -164,6 +259,26 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
       });
     },
 
+    /** Recent current saved memories (platform=lobu) in one workspace, newest first. */
+    async listMemories(context: string | null, workspace: string, limit: number): Promise<unknown> {
+      return request(context, `/api/${encodeURIComponent(workspace)}/read_knowledge`, {
+        platforms: ["lobu"],
+        semantic_type: ["fact", "decision", "preference", "observation", "note"],
+        sort_by: "date",
+        sort_order: "desc",
+        limit,
+        include_total: false,
+      });
+    },
+
+    /** Exact event lineages for saved event ids, including supersede and tombstone chains. */
+    async readEvents(context: string | null, workspace: string, ids: number[]): Promise<unknown> {
+      return request(context, `/api/${encodeURIComponent(workspace)}/read_knowledge`, {
+        content_ids: ids,
+        limit: Math.min(Math.max(ids.length * 3, 50), 200),
+      });
+    },
+
     /** Hides memories with Lobu's tombstone delete; they stay recoverable in Lobu. */
     async deleteMemories(context: string | null, workspace: string, ids: number[], reason: string): Promise<number[]> {
       const script = `export default async (_ctx, client) => client.knowledge.delete(${JSON.stringify({ content_ids: ids, reason })});`;
@@ -173,16 +288,6 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
       })) as { success?: boolean; return_value?: { deleted_ids?: number[]; already_superseded_ids?: number[] }; error?: { message?: string } };
       if (result.success !== true) throw new Error(result.error?.message ?? "run_sdk failed");
       return [...(result.return_value?.deleted_ids ?? []), ...(result.return_value?.already_superseded_ids ?? [])];
-    },
-
-    /** Runs a read-only script in one workspace and returns its value. */
-    async querySdk(context: string | null, workspace: string, title: string, script: string): Promise<unknown> {
-      const result = (await request(context, `/api/${encodeURIComponent(workspace)}/query_sdk`, {
-        title,
-        script,
-      })) as { success?: boolean; return_value?: unknown; error?: { message?: string } };
-      if (result.success !== true) throw new Error(result.error?.message ?? "query_sdk failed");
-      return result.return_value;
     },
   };
 }

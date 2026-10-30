@@ -1,15 +1,15 @@
 // Save to Lobu: turns reviewed drafts into Lobu memories with save_memory,
-// through the same CLI login the dashboard reads with.
+// through the user's CLI login.
 import { createHash } from "node:crypto";
 import type { MemoryDraft, RememberSubmission } from "./memory-contract";
 import type { LobuApi } from "./lobu-api";
-import type { WorkspaceOwner } from "./snapshot";
+import type { WorkspaceOwner } from "./workspaces";
 
 const TITLE_MAX = 80;
 
 export interface SaveOutcome {
   workspace: string;
-  saved: { eventId: number; title: string; url: string | null }[];
+  saved: { eventId: number; title: string; url: string | null; replacedEventId?: number }[];
   failed: { title: string; error: string }[];
 }
 
@@ -70,7 +70,8 @@ export function absoluteUrl(viewUrl: string | null, baseUrl: string): string | n
 
 /** Same thread, workspace, and text saves once, even if the form is submitted twice. */
 export function idempotencyKey(threadId: string, workspace: string, memory: MemoryDraft): string {
-  const digest = createHash("sha256").update(`${threadId}\n${workspace}\n${memory.title}\n${memory.content}`).digest("hex");
+  const replaces = memory.replacesEventId ? `\nreplaces:${memory.replacesEventId}` : "";
+  const digest = createHash("sha256").update(`${threadId}\n${workspace}\n${memory.title}\n${memory.content}${replaces}`).digest("hex");
   return `bb-plugin-lobu:${digest}`;
 }
 
@@ -90,8 +91,15 @@ export async function saveMemories(
           content: memory.content,
           semantic_type: memory.kind,
           idempotency_key: idempotencyKey(threadId, workspace, memory),
+          ...(memory.replacesEventId ? { supersedes_event_id: memory.replacesEventId } : {}),
         });
-        return { ok: true as const, eventId: saved.id, title: memory.title, url: absoluteUrl(saved.viewUrl, baseUrl) };
+        return {
+          ok: true as const,
+          eventId: saved.id,
+          title: memory.title,
+          url: absoluteUrl(saved.viewUrl, baseUrl),
+          ...(memory.replacesEventId ? { replacedEventId: memory.replacesEventId } : {}),
+        };
       } catch (cause) {
         return { ok: false as const, title: memory.title, error: cause instanceof Error ? cause.message : String(cause) };
       }
@@ -99,7 +107,14 @@ export async function saveMemories(
   );
   return {
     workspace,
-    saved: results.filter((r) => r.ok).map(({ eventId, title, url }) => ({ eventId, title, url })),
+    saved: results
+      .filter((r) => r.ok)
+      .map(({ eventId, title, url, replacedEventId }) => ({
+        eventId,
+        title,
+        url,
+        ...(replacedEventId === undefined ? {} : { replacedEventId }),
+      })),
     failed: results.filter((r) => !r.ok).map(({ title, error }) => ({ title, error })),
   };
 }

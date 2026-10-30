@@ -6,9 +6,11 @@ import {
   type PluginBrowserBbSdk,
   useSdk,
 } from "@get-bb/plugin-sdk/app";
-import { DashboardPage, NeedsYouStrip } from "@/components/dashboard";
+import { LobuHome } from "@/components/home";
+import { SetupSettings } from "@/components/setup";
 import { ThreadMemoryPanel } from "@/components/memory";
 import { RememberFormView } from "@/components/remember-form";
+import { z } from "zod";
 import { learnResultSchema, REMEMBER_RENDERER, rememberResultSchema } from "@/lib/memory-contract";
 
 const PLUGIN_ID = "lobu";
@@ -29,17 +31,14 @@ async function openReview(threadId: string, text: string) {
 }
 
 export default definePluginApp((app) => {
-  app.slots.navPanel({
-    id: "dashboard",
-    title: "Lobu",
-    icon: "lobu/lobu",
-    path: "dashboard",
-    component: DashboardPage,
-  });
-  app.slots.homepageSection({
-    id: "needs-you",
-    title: "Lobu",
-    component: NeedsYouStrip,
+  // The New thread screen: setup until bb is connected, then what a new
+  // thread in the project starts with. Settings: the Lobu account.
+  app.slots.homepageSection({ id: "lobu", title: "Lobu memory", component: LobuHome });
+  app.slots.settingsSection({
+    id: "account",
+    title: "Lobu account",
+    description: "Where agents in bb save and search memory.",
+    component: SetupSettings,
   });
 
   // What this thread started with, looked up, and saved, with undo and pin.
@@ -60,6 +59,28 @@ export default definePluginApp((app) => {
     icon: "lobu/lobu",
     run: ({ threadId, message, selectedText }) =>
       openReview(threadId, selectedText?.trim() ? selectedText : message.text),
+  });
+
+  // Lobu's own page of everything bb saved.
+  app.slots.experimental_threadAction({
+    id: "open-in-lobu",
+    title: "Open what bb saved in Lobu",
+    icon: "lobu/lobu",
+    group: experimental_THREAD_ACTION_GROUPS.organize,
+    item: ({ sdk: client, navigate }) => ({
+      label: "Open what bb saved in Lobu",
+      icon: "lobu/lobu",
+      run: async () => {
+        const { url } = await client.plugins.callRpc({
+          pluginId: PLUGIN_ID,
+          method: "savedLink",
+          input: {},
+          outputSchema: z.object({ url: z.string().nullable() }),
+        });
+        if (url === null) throw new Error("bb has not saved anything to Lobu through this login yet.");
+        navigate.openUrl(url);
+      },
+    }),
   });
 
   // Ask the thread's agent to propose what is worth keeping.

@@ -11,7 +11,7 @@ import {
   pickWorkspaceWithHints,
   saveMemories,
 } from "../lib/memory";
-import type { WorkspaceOwner } from "../lib/snapshot";
+import type { WorkspaceOwner } from "../lib/workspaces";
 
 const BASE = "https://lobu.example";
 const owner = (overrides: Partial<WorkspaceOwner> = {}): WorkspaceOwner => ({

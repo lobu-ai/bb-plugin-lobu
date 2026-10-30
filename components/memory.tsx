@@ -1,6 +1,5 @@
-// Lobu memory in bb: the Memory tab of the Lobu page and the thread panel.
-// The panel shows what a thread was given, looked up, and saved; both show the
-// project's pins, note box, and brief through the same component.
+// Lobu memory in bb: the thread panel. It shows what a thread was given,
+// looked up, and saved, and the project's pins, note box, and brief.
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { UrlLink, useRpc } from "@get-bb/plugin-sdk/app";
@@ -8,12 +7,13 @@ import type { rpcContract } from "@/lib/contract";
 import type {
   MemoryHit,
   MemoryKind,
-  MemoryOverview,
   PinnedMemory,
   ProjectMemory,
+  ProjectMemoryView,
   SavedRecord,
   ThreadMemory,
 } from "@/lib/memory-contract";
+import { SetupNotice } from "@/components/setup";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { errorText, formatCount, sinceMs } from "@/lib/format";
@@ -158,15 +158,19 @@ function Status({ error, notice }: { error: string | null; notice: string | null
 function SavedRow({
   record,
   projectName,
+  shareWorkspace,
   busy,
   onUndo,
   onPin,
+  onShare,
 }: {
   record: SavedRecord;
   projectName: string | null;
+  shareWorkspace: string | null;
   busy: boolean;
   onUndo: () => void;
   onPin: (() => void) | null;
+  onShare: (() => void) | null;
 }) {
   const title = <span className="font-medium">{record.title}</span>;
   return (
@@ -201,6 +205,9 @@ function SavedRow({
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+        {onShare === null || shareWorkspace === null ? null : (
+          <IconAction icon="lobu/share" label={`Share to ${shareWorkspace}`} onClick={onShare} disabled={busy} />
+        )}
         {onPin === null ? null : <IconAction icon="lobu/pin" label="Pin to this project" onClick={onPin} disabled={busy} />}
         <IconAction icon="lobu/undo" label="Undo: remove from Lobu" onClick={onUndo} disabled={busy} />
       </div>
@@ -208,15 +215,17 @@ function SavedRow({
   );
 }
 
-/** Undo and pin for a list of saved memories. */
+/** Undo, share, and pin for a list of saved memories. */
 function SavedList({
   records,
   projectNames,
+  shareWorkspace = null,
   empty,
   onChanged,
 }: {
   records: SavedRecord[];
   projectNames: Map<string, string>;
+  shareWorkspace?: string | null;
   empty: ReactNode;
   onChanged: () => void;
 }) {
@@ -233,40 +242,55 @@ function SavedList({
         <Empty>{empty}</Empty>
       ) : (
         <ul className="divide-y divide-border">
-          {records.map((record) => (
-            <SavedRow
-              key={record.eventId}
-              record={record}
-              projectName={record.projectId === null ? null : (projectNames.get(record.projectId) ?? null)}
-              busy={busy === String(record.eventId)}
-              onUndo={() =>
-                void run(String(record.eventId), async () => {
-                  await rpc.call("undoMemory", { eventId: record.eventId });
-                  onChanged();
-                  return `Removed "${record.title}". It stays recoverable in Lobu.`;
-                })
-              }
-              onPin={
-                record.projectId === null
-                  ? null
-                  : () =>
-                      void run(String(record.eventId), async () => {
-                        const project = await rpc.call("pinMemory", {
-                          projectId: record.projectId as string,
-                          item: {
-                            eventId: record.eventId,
-                            workspace: record.workspace,
-                            title: record.title,
-                            content: record.content,
-                            url: record.url,
-                          },
-                        });
-                        onChanged();
-                        return `Pinned to ${project.name}. New threads there start with it.`;
-                      })
-              }
-            />
-          ))}
+          {records.map((record) => {
+            const targetWorkspace =
+              shareWorkspace !== null && shareWorkspace !== record.workspace ? shareWorkspace : null;
+            return (
+              <SavedRow
+                key={record.eventId}
+                record={record}
+                projectName={record.projectId === null ? null : (projectNames.get(record.projectId) ?? null)}
+                shareWorkspace={targetWorkspace}
+                busy={busy === String(record.eventId)}
+                onUndo={() =>
+                  void run(String(record.eventId), async () => {
+                    await rpc.call("undoMemory", { eventId: record.eventId });
+                    onChanged();
+                    return `Removed "${record.title}". It stays recoverable in Lobu.`;
+                  })
+                }
+                onShare={
+                  targetWorkspace === null
+                    ? null
+                    : () =>
+                        void run(String(record.eventId), async () => {
+                          await rpc.call("shareMemory", { eventId: record.eventId, workspace: targetWorkspace });
+                          onChanged();
+                          return `Shared "${record.title}" to ${targetWorkspace}.`;
+                        })
+                }
+                onPin={
+                  record.projectId === null
+                    ? null
+                    : () =>
+                        void run(String(record.eventId), async () => {
+                          const project = await rpc.call("pinMemory", {
+                            projectId: record.projectId as string,
+                            item: {
+                              eventId: record.eventId,
+                              workspace: record.workspace,
+                              title: record.title,
+                              content: record.content,
+                              url: record.url,
+                            },
+                          });
+                          onChanged();
+                          return `Pinned to ${project.name}. New threads there start with it.`;
+                        })
+                }
+              />
+            );
+          })}
         </ul>
       )}
     </>
@@ -315,6 +339,11 @@ function HitRow({ hit }: { hit: MemoryHit }) {
 }
 
 /** A project's Lobu link, pins, a note box, and the brief new threads get. */
+/**
+ * What a new thread in the project starts with, as the brief gives it: pins
+ * first, then what earlier threads learned. Below it, a note to pin and the
+ * team workspace agents also search.
+ */
 function ProjectContext({
   project,
   workspaces,
@@ -326,32 +355,17 @@ function ProjectContext({
 }) {
   const rpc = useRpc<typeof rpcContract>();
   const { busy, error, notice, run } = useActions();
+  const [noting, setNoting] = useState(false);
   const [note, setNote] = useState("");
+  const empty = project.pins.length === 0 && project.learned.length === 0;
   return (
-    <div className="space-y-3 py-3">
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span>Team knowledge from</span>
-        <WorkspaceSelect
-          label={`Lobu workspace linked to ${project.name}`}
-          value={project.workspace}
-          workspaces={workspaces}
-          placeholder="No linked workspace"
-          onChange={(workspace) =>
-            void run("link", async () => {
-              onProject(await rpc.call("linkProject", { projectId: project.id, workspace }));
-              return workspace === null ? "Unlinked." : `Agents here now also search ${workspace}.`;
-            })
-          }
-        />
-        <span>plus your personal workspace.</span>
-      </div>
-
-      {project.pins.length === 0 ? (
+    <div className="space-y-2 py-2">
+      {empty ? (
         <p className="text-xs text-muted-foreground">
-          Nothing pinned yet. Pinned notes and memories open every new thread in {project.name}.
+          What agents learn in {project.name} shows up here, and notes you add are pinned at the top.
         </p>
       ) : (
-        <ul className="divide-y divide-border rounded-md border border-border px-3">
+        <ul className="divide-y divide-border">
           {project.pins.map((pin) => (
             <PinRow
               key={pin.pinnedAt}
@@ -364,186 +378,151 @@ function ProjectContext({
               }
             />
           ))}
+          {project.learned.map((item) => (
+            <li
+              key={`${item.workspace}-${item.eventId ?? item.title}`}
+              className={cn(
+                "group flex items-start gap-2 py-2 text-sm",
+                item.eventId !== null && busy === `undo-${item.eventId}` && "opacity-50",
+              )}
+            >
+              <Icon name="lobu/memory" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">{item.title}</span>
+              {item.eventId === null ? null : (
+                <IconAction
+                  icon="lobu/close"
+                  label={`Remove "${item.title}" from brief and Lobu`}
+                  disabled={busy === `undo-${item.eventId}`}
+                  onClick={() =>
+                    void run(`undo-${item.eventId}`, async () => {
+                      await rpc.call("undoMemory", { eventId: item.eventId as number });
+                      const refreshed = await rpc.call("projectMemory", { projectId: project.id });
+                      onProject(refreshed.project);
+                      return `Removed "${item.title}". It stays recoverable in Lobu.`;
+                    })
+                  }
+                />
+              )}
+            </li>
+          ))}
         </ul>
       )}
 
-      <form
-        className="space-y-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const text = note.trim();
-          if (text === "") return;
-          void run("note", async () => {
-            onProject(await rpc.call("addNote", { projectId: project.id, text }));
-            setNote("");
-            return "Saved to your personal workspace and pinned here.";
-          });
-        }}
-      >
-        <textarea
-          aria-label={`Add context for ${project.name}`}
-          className="min-h-16 w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          placeholder={`Add something every new thread in ${project.name} should know…`}
-          value={note}
-          onChange={(event) => setNote(event.target.value)}
-        />
-        <div className="flex items-center gap-2">
+      {noting ? (
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const text = note.trim();
+            if (text === "") return;
+            void run("note", async () => {
+              onProject(await rpc.call("addNote", { projectId: project.id, text }));
+              setNote("");
+              setNoting(false);
+              return "Saved to your personal workspace and pinned here.";
+            });
+          }}
+        >
+          <input
+            aria-label={`Add a note for ${project.name}`}
+            autoFocus
+            className="h-8 min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            placeholder={`Something every new thread in ${project.name} should know`}
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+          />
           <Button type="submit" size="sm" disabled={note.trim() === "" || busy === "note"}>
-            <Icon name="lobu/plus" />
-            Add and pin
+            Pin
           </Button>
-          <Status error={error} notice={notice} />
-        </div>
-      </form>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setNoting(false)}>
+            Cancel
+          </Button>
+        </form>
+      ) : null}
 
-      <details className="group rounded-md border border-border">
-        <summary className="cursor-pointer select-none px-3 py-2 text-xs text-muted-foreground hover:text-foreground">
-          What new threads in {project.name} start with
-        </summary>
-        {project.brief === null ? (
-          <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
-            Nothing yet. Pin something, or let agents save what they learn here.
-          </p>
-        ) : (
-          <pre className="max-h-72 overflow-auto whitespace-pre-wrap border-t border-border px-3 py-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
-            {project.brief}
-          </pre>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        {noting ? null : (
+          <Button variant="ghost" size="sm" onClick={() => setNoting(true)}>
+            <Icon name="lobu/plus" />
+            Add a note
+          </Button>
         )}
-      </details>
-    </div>
-  );
-}
-
-function ProjectRow({
-  project,
-  workspaces,
-  open,
-  onToggle,
-  onProject,
-}: {
-  project: ProjectMemory;
-  workspaces: WorkspaceOption[];
-  open: boolean;
-  onToggle: () => void;
-  onProject: (project: ProjectMemory) => void;
-}) {
-  return (
-    <li>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={onToggle}
-        className="flex w-full items-center gap-2 py-2.5 text-left text-sm hover:text-foreground"
-      >
-        <Icon name="lobu/folder" className="size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 truncate font-medium">{project.name}</span>
-        {project.workspace === null ? null : (
-          <span className="shrink-0 rounded-full bg-accent px-2 text-xs text-foreground">{project.workspace}</span>
-        )}
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-          {project.pins.length} pinned · {project.learned} learned
-        </span>
-        <span aria-hidden className={cn("shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}>
-          ›
-        </span>
-      </button>
-      {open ? <ProjectContext project={project} workspaces={workspaces} onProject={onProject} /> : null}
-    </li>
-  );
-}
-
-const OVERVIEW_POLL_MS = 60_000;
-
-/** The Memory tab of the Lobu page. */
-export function MemoryTab({ reviews }: { reviews: ReactNode }) {
-  const rpc = useRpc<typeof rpcContract>();
-  const [overview, setOverview] = useState<MemoryOverview | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [open, setOpen] = useState<string | null>(null);
-  const load = useCallback(() => {
-    rpc.call("memoryOverview", {}).then(
-      (next) => {
-        setOverview(next);
-        setError(null);
-      },
-      (cause: unknown) => setError(errorText(cause)),
-    );
-  }, [rpc]);
-  useEffect(() => {
-    load();
-    const timer = setInterval(load, OVERVIEW_POLL_MS);
-    return () => clearInterval(timer);
-  }, [load]);
-  if (overview === null) {
-    return error === null ? (
-      <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
-        Loading memory…
-      </div>
-    ) : (
-      <p role="alert" className="text-sm text-destructive">
-        {error}
-      </p>
-    );
-  }
-  const names = new Map(overview.projects.map((p) => [p.id, p.name]));
-  const found = overview.saved.filter((record) => record.uses > 0).length;
-  const replaceProject = (project: ProjectMemory) =>
-    setOverview((current) =>
-      current === null ? current : { ...current, projects: current.projects.map((p) => (p.id === project.id ? project : p)) },
-    );
-  return (
-    <div className="space-y-4">
-      <p className="text-xs text-muted-foreground">
-        {overview.autoSave
-          ? overview.personal === null
-            ? "Auto-save is on, but none of your logins has a personal workspace, so agents ask before saving."
-            : `Auto-save is on: agents save what they learn to ${overview.personal}. Undo anything below.`
-          : "Auto-save is off: agents ask before saving."}{" "}
-        Change it in this plugin's settings.
-      </p>
-      {error === null ? null : (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      <Card
-        icon="lobu/memory"
-        title="Recently saved"
-        aside={overview.saved.length === 0 ? undefined : `${formatCount(found)} of ${formatCount(overview.saved.length)} found by agents`}
-      >
-        <SavedList
-          records={overview.saved}
-          projectNames={names}
-          onChanged={load}
-          empty="Nothing saved yet. Agents save decisions, gotchas, and standing preferences here as they work."
+        <span>Agents also search</span>
+        <WorkspaceSelect
+          label={`Lobu workspace linked to ${project.name}`}
+          value={project.workspace}
+          workspaces={workspaces}
+          placeholder="no team workspace"
+          onChange={(workspace) =>
+            void run("link", async () => {
+              onProject(await rpc.call("linkProject", { projectId: project.id, workspace }));
+              return workspace === null ? "Unlinked." : `Agents here now also search ${workspace}.`;
+            })
+          }
         />
-      </Card>
-      <Card icon="lobu/folder" title="Projects" aside="what each project's threads start with">
-        {overview.projects.length === 0 ? (
-          <Empty>No bb projects yet.</Empty>
-        ) : (
-          <ul className="divide-y divide-border">
-            {overview.projects.map((project) => (
-              <ProjectRow
-                key={project.id}
-                project={project}
-                workspaces={overview.workspaces}
-                open={open === project.id}
-                onToggle={() => setOpen((current) => (current === project.id ? null : project.id))}
-                onProject={replaceProject}
-              />
-            ))}
-          </ul>
-        )}
-      </Card>
-      {reviews}
+        <Status error={error} notice={notice} />
+      </div>
     </div>
+  );
+}
+
+/**
+ * The New thread screen's view of the project in view: a line saying what a
+ * new thread there starts with, opening the same controls as the thread panel.
+ */
+export function ProjectBrief({ projectId }: { projectId: string }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [view, setView] = useState<ProjectMemoryView | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    setView(null);
+    rpc.call("projectMemory", { projectId }).then(setView, () => setView(null));
+  }, [rpc, projectId]);
+  if (view === null) return null;
+  const { project } = view;
+  const parts = [
+    project.pins.length === 0 ? null : `${project.pins.length} pinned`,
+    project.learned.length === 0 ? null : `${project.learned.length} learned in earlier threads`,
+  ].filter((part) => part !== null);
+  // Not connected and nothing to start with: the setup card says all there is.
+  if (view.personal === null && parts.length === 0) return null;
+  return (
+    <section className="space-y-1 rounded-lg border border-border px-4 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">
+          New threads in <span className="text-foreground">{project.name}</span> start with{" "}
+          {parts.length === 0 ? "nothing yet" : parts.join(" and ")}.
+        </p>
+        <Button variant="ghost" size="sm" onClick={() => setOpen((shown) => !shown)}>
+          {open ? "Hide" : "Show"}
+        </Button>
+      </div>
+      {open ? <ProjectContext project={project} workspaces={view.workspaces} onProject={(next) => setView({ ...view, project: next })} /> : null}
+    </section>
   );
 }
 
 const THREAD_POLL_MS = 15_000;
 
 /** The thread's Lobu memory panel: what it started with, looked up, and saved. */
+/** Lobu's events page with everything bb saved through the login it uses. */
+function SavedInLobu() {
+  const rpc = useRpc<typeof rpcContract>();
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    rpc.call("savedLink", {}).then(
+      (next) => setUrl(next.url),
+      () => setUrl(null),
+    );
+  }, [rpc]);
+  if (url === null) return null;
+  return (
+    <UrlLink href={url} className="inline-block text-xs text-muted-foreground underline hover:text-foreground">
+      See everything bb saved in Lobu
+    </UrlLink>
+  );
+}
+
 export function ThreadMemoryPanel({ threadId }: { threadId: string }) {
   const rpc = useRpc<typeof rpcContract>();
   const [data, setData] = useState<ThreadMemory | null>(null);
@@ -578,11 +557,13 @@ export function ThreadMemoryPanel({ threadId }: { threadId: string }) {
   const names = new Map(project === null ? [] : [[project.id, project.name]]);
   return (
     <div className="space-y-4">
+      <SetupNotice />
       {error === null ? null : (
         <p role="alert" className="text-sm text-destructive">
           {error}
         </p>
       )}
+      <SavedInLobu />
       <Card icon="lobu/given" title="Started with" aside={given.length === 0 ? undefined : `${given.length} from Lobu`}>
         {given.length === 0 ? (
           <Empty>
@@ -640,6 +621,7 @@ export function ThreadMemoryPanel({ threadId }: { threadId: string }) {
         <SavedList
           records={data.saved}
           projectNames={names}
+          shareWorkspace={project?.workspace ?? null}
           onChanged={load}
           empty="Nothing saved from this thread yet."
         />

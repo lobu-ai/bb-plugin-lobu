@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- Setup is built in. A **Connect Lobu memory** card on the New thread screen
+  installs or updates the Lobu CLI with bun or npm (showing the command when
+  it cannot), then signs you in to Lobu Cloud or runs Lobu on this machine
+  (`lobu run` in `~/lobu-bb`, or a local Lobu already serving), as the Lobu
+  Mac app does, and disappears once bb is connected. Settings → Plugins → Lobu gains a **Lobu account**
+  section showing the Lobu bb uses and how many memories it saved there,
+  with buttons to switch between Lobu Cloud, Lobu on this machine, or
+  another Lobu.
+- bb uses one CLI login, picked in the Lobu account section (the CLI's active
+  context until you pick one). The Lobu URL comes from the login. Identity,
+  workspaces, and tokens come from `lobu whoami --json`, like the Mac app.
+- Removed the `baseUrl`, `hiddenWorkspaces`, `lobuBin`, `recapProvider`, and
+  `recapModel` settings. The CLI is found on its own, and recaps use the
+  archived thread's provider.
+- The New thread screen shows what a new thread in the project picked in the
+  composer starts with, and opens the project's pins, notes, and linked
+  workspace. A pinned memory leads the brief once instead of also appearing
+  among what was learned.
+- Without a Lobu connection, threads still start with the project's saved
+  brief, and the New thread screen shows it under the setup card. The
+  `lobu_search` and `lobu_remember` tools tell the agent Lobu is not
+  connected and to continue without it, instead of returning an error.
+- Requests to a Lobu on this machine wait up to two minutes, since a new
+  local Lobu loads its search model on the first search.
+- **Open what bb saved in Lobu**, in the thread's ⋯ menu and the Lobu memory
+  panel, opens Lobu's events page filtered to the memories bb saved.
+- Removed the Lobu sidebar page: the Needs you dashboard (approvals, failed
+  runs, connections and devices, activity, metrics), its New thread screen
+  summary, and the `metrics` setting. Lobu's own app covers them.
+- Archived-thread recaps save like any other memory and need auto-save on;
+  the review queue on the Lobu page is gone.
 - Memory runs as a loop. New threads start with their project's Lobu brief:
   what you pinned there and what earlier threads learned, most used first.
 - Agents get `lobu_search`, which searches your personal workspace and the
@@ -10,17 +41,24 @@
   skipping anything Lobu already holds. Turn off **Save memories
   automatically** to review each save in a form instead.
 - A Lobu memory panel in each thread shows what it started with, looked up,
-  and saved, with undo and pin on every saved memory.
-- The Lobu page gains a Memory tab: recent saves with how often agents found
-  each, and every bb project's linked workspace, pins, a note box, and the
-  exact brief its threads start with.
+  and saved, with undo, pin, and one-click sharing to the project's linked
+  team workspace on every saved memory, plus remove buttons on learned brief
+  rows.
+- `lobu_remember` accepts `replacesEventId` (`supersedes_event_id`) to replace
+  an outdated memory in Lobu and drop the stale entry from the project brief.
+- Added `bb lobu search` and `bb lobu remember` plugin CLI commands so ACP
+  agent providers without native plugin tools participate in the same memory
+  loop.
+- Saved memories and pins reconcile against Lobu's `read_knowledge` (pruning
+  tombstoned memories, updating superseded ones, and hydrating saved memories
+  from linked workspaces).
 
 - The plugin runs the `lobu` CLI with your login shell's `PATH`. bb opened
   from the Dock only sees launchd's minimal `PATH`, so a CLI that needs a
-  Homebrew, nvm, or Bun `node` failed to start and the Lobu page wrongly
+  Homebrew, nvm, or Bun `node` failed to start and the plugin wrongly
   asked you to log in.
-- A CLI that cannot run now gets its own setup step showing the CLI's error,
-  instead of being reported as a missing login.
+- A CLI that cannot run now reports the CLI's own error instead of a missing
+  login.
 
 ## 0.4.1
 

@@ -14,6 +14,8 @@ export const memoryDraftSchema = z.object({
   evidence: z.string().trim().max(500).nullish(),
   /** Workspace slug or name the memory belongs to; null lets the server pick. Absent on older queued drafts. */
   workspace: z.string().trim().min(1).nullish(),
+  /** Event id of an older saved memory this one corrects or replaces (shown in lobu_search and the project brief). */
+  replacesEventId: z.number().int().positive().nullish(),
 });
 export type MemoryDraft = z.infer<typeof memoryDraftSchema>;
 
@@ -42,19 +44,6 @@ export type RememberSubmission = z.infer<typeof rememberSubmissionSchema>;
 
 /** The form's renderer id, shared by requestInput and the pendingInteraction slot. */
 export const REMEMBER_RENDERER = "remember";
-
-/** A recap of an archived thread, waiting on the Lobu page for review. */
-export const pendingReviewSchema = z.object({
-  id: z.string(),
-  sourceTitle: z.string(),
-  createdAt: z.number(),
-  firstMessage: z.string().nullable(),
-  form: rememberFormSchema,
-});
-export type PendingReview = z.infer<typeof pendingReviewSchema>;
-
-/** What saving a reviewed recap did, in the same words the thread row uses. */
-export const savedSummarySchema = z.object({ title: z.string(), detail: z.string() });
 
 export const rememberResultSchema = z.object({ opened: z.boolean(), error: z.string().nullable() });
 export const learnResultSchema = z.object({ sent: z.boolean() });
@@ -116,26 +105,16 @@ export type ThreadLog = z.infer<typeof threadLogSchema>;
 
 const workspaceOptionSchema = z.object({ slug: z.string(), name: z.string() });
 
-/** A bb project with its Lobu link, pins, and the brief its threads start with. */
+/** A bb project with its Lobu link, pins, and what its new threads start with. */
 export const projectMemorySchema = z.object({
   id: z.string(),
   name: z.string(),
   workspace: z.string().nullable(),
   pins: z.array(pinnedMemorySchema),
-  /** Exactly what a new thread here receives; null when there is nothing to give. */
-  brief: z.string().nullable(),
-  learned: z.number(),
+  /** The learned memories a new thread here receives after the pins, in brief order. */
+  learned: z.array(z.object({ eventId: z.number().nullable(), workspace: z.string(), title: z.string() })),
 });
 export type ProjectMemory = z.infer<typeof projectMemorySchema>;
-
-export const memoryOverviewSchema = z.object({
-  autoSave: z.boolean(),
-  personal: z.string().nullable(),
-  workspaces: z.array(workspaceOptionSchema),
-  saved: z.array(savedRecordSchema),
-  projects: z.array(projectMemorySchema),
-});
-export type MemoryOverview = z.infer<typeof memoryOverviewSchema>;
 
 export const threadMemorySchema = z.object({
   personal: z.string().nullable(),
@@ -145,6 +124,13 @@ export const threadMemorySchema = z.object({
   saved: z.array(savedRecordSchema),
 });
 export type ThreadMemory = z.infer<typeof threadMemorySchema>;
+
+export const projectMemoryViewSchema = z.object({
+  personal: z.string().nullable(),
+  workspaces: z.array(workspaceOptionSchema),
+  project: projectMemorySchema,
+});
+export type ProjectMemoryView = z.infer<typeof projectMemoryViewSchema>;
 
 /** What the page sends to pin something; pinnedAt is stamped by the server. */
 export const pinInputSchema = pinnedMemorySchema.omit({ pinnedAt: true });
