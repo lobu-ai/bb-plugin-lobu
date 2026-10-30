@@ -118,7 +118,7 @@ describe("saveMemories", () => {
     ]);
     expect(outcome).toEqual({
       workspace: "acme",
-      saved: [{ title: "Use bun", url: `${BASE}/acme/events?id=1` }],
+      saved: [{ eventId: 1, title: "Use bun", url: `${BASE}/acme/events?id=1` }],
       failed: [{ title: "Bad kind", error: "semantic_type rejected" }],
     });
     expect(describeOutcome(outcome)).toEqual({
@@ -145,7 +145,7 @@ describe("outcomeForAgent", () => {
     expect(outcomeForAgent({ workspace: "acme", saved: [], failed: [] })).toBe(
       "Saved nothing to Lobu. The user unticked every proposed memory.",
     );
-    expect(outcomeForAgent({ workspace: "acme", saved: [{ title: "Use bun", url: null }], failed: [] })).toBe(
+    expect(outcomeForAgent({ workspace: "acme", saved: [{ eventId: 1, title: "Use bun", url: null }], failed: [] })).toBe(
       "Saved 1 memory to acme:\n- Use bun",
     );
   });

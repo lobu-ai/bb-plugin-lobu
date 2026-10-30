@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Memory runs as a loop. New threads start with their project's Lobu brief:
+  what you pinned there and what earlier threads learned, most used first.
+- Agents get `lobu_search`, which searches your personal workspace and the
+  Lobu workspace linked to the project, and returns saved memories only.
+- `lobu_remember` saves straight to your personal workspace by default,
+  skipping anything Lobu already holds. Turn off **Save memories
+  automatically** to review each save in a form instead.
+- A Lobu memory panel in each thread shows what it started with, looked up,
+  and saved, with undo and pin on every saved memory.
+- The Lobu page gains a Memory tab: recent saves with how often agents found
+  each, and every bb project's linked workspace, pins, a note box, and the
+  exact brief its threads start with.
+
 - The plugin runs the `lobu` CLI with your login shell's `PATH`. bb opened
   from the Dock only sees launchd's minimal `PATH`, so a CLI that needs a
   Homebrew, nvm, or Bun `node` failed to start and the Lobu page wrongly

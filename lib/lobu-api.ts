@@ -152,6 +152,29 @@ export function createLobuApi({ baseUrl, lobuBin }: LobuApiOptions) {
       return { id: saved.id, viewUrl: saved.view_url ?? null };
     },
 
+    /** Lobu's search_memory over one workspace's saved memory; the raw response. */
+    async searchMemory(context: string | null, workspace: string, query: string, limit: number): Promise<unknown> {
+      return request(context, `/api/${encodeURIComponent(workspace)}/search_memory`, {
+        query,
+        limit,
+        content_limit: limit,
+        include_content: true,
+        include_connections: false,
+        include_public_catalogs: false,
+      });
+    },
+
+    /** Hides memories with Lobu's tombstone delete; they stay recoverable in Lobu. */
+    async deleteMemories(context: string | null, workspace: string, ids: number[], reason: string): Promise<number[]> {
+      const script = `export default async (_ctx, client) => client.knowledge.delete(${JSON.stringify({ content_ids: ids, reason })});`;
+      const result = (await request(context, `/api/${encodeURIComponent(workspace)}/run_sdk`, {
+        title: "Undo a memory saved from bb",
+        script,
+      })) as { success?: boolean; return_value?: { deleted_ids?: number[]; already_superseded_ids?: number[] }; error?: { message?: string } };
+      if (result.success !== true) throw new Error(result.error?.message ?? "run_sdk failed");
+      return [...(result.return_value?.deleted_ids ?? []), ...(result.return_value?.already_superseded_ids ?? [])];
+    },
+
     /** Runs a read-only script in one workspace and returns its value. */
     async querySdk(context: string | null, workspace: string, title: string, script: string): Promise<unknown> {
       const result = (await request(context, `/api/${encodeURIComponent(workspace)}/query_sdk`, {
