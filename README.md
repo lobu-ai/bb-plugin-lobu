@@ -44,24 +44,31 @@ It works as a loop:
 
 - **Threads start with their project's brief.** Every new thread gets a short
   section with what you pinned to its bb project and what earlier threads
-  there learned, most used first. It stays under bb's 4,096-character limit
-  for plugin instructions.
-- **Agents search before they work.** A `lobu_search` tool searches your
+  there learned, most used first. When a project is linked to a team Lobu
+  workspace, saved memories from that workspace join the brief too, and edits
+  or deletes made in Lobu sync back into bb. The brief stays under bb's
+  4,096-character limit for plugin instructions.
+- **Agents search before they work.** A `lobu_search` tool (and `bb lobu search`
+  CLI command for ACP providers that do not expose plugin tools) searches your
   personal workspace and the Lobu workspace you linked to the project. Only
   saved memories come back, not browser history or other connector content.
-- **Agents save what they learn.** A `lobu_remember` tool saves decisions,
-  non-obvious facts, and standing preferences, at most three at a time and
-  each with an evidence quote. With **Save memories automatically** on (the
-  default), they go straight to your personal workspace, and anything Lobu
-  already holds is skipped. With it off, a review form opens first.
+- **Agents save and supersede what they learn.** A `lobu_remember` tool (and
+  `bb lobu remember` CLI command) saves decisions, non-obvious facts, and
+  standing preferences, at most three at a time and each with an evidence
+  quote. Passing `replacesEventId` (`--replaces-id`) supersedes an outdated
+  memory instead of leaving both active. With **Save memories automatically**
+  on (the default), saves go straight to your personal workspace, and anything
+  Lobu already holds is skipped. With it off, a review form opens first.
 
 You see it in the thread's **Lobu memory panel**. Open it from the side
 panel's new-tab menu. It shows what the thread started with, what the agent
-looked up, and what it saved. Every saved memory can be undone or pinned to
-the project. The panel also shows the project's linked workspace, its pins,
-a box to add a note every new thread should know, and the exact brief its
-threads start with. Undo hides the memory with Lobu's own delete, which keeps
-it recoverable in Lobu. To move or edit a memory, open it in Lobu.
+looked up, and what it saved. Every saved memory can be undone, pinned to the
+project, or shared in one click to the project's linked team workspace. The
+panel also shows the project's linked workspace, its pins, a box to add a note
+every new thread should know, and the exact brief its threads start with —
+with remove controls on both pinned and learned rows. Undo hides the memory
+with Lobu's own delete, which keeps it recoverable in Lobu. To edit a memory,
+open it in Lobu.
 
 Before a thread exists, bb's New thread screen shows the same brief for the
 project picked in the composer: one line saying what a new thread there will
@@ -82,10 +89,10 @@ thread's ⋯ menu asks the agent to look back over the thread.
 
 ![The review form, with two memories proposed from a thread](docs/screenshots/save-to-lobu.jpg)
 
-**Recap archived threads**, off by default, has a hidden agent read each
-thread you archive and saves its memories like any other. It needs auto-save
-on, since nobody reviews a form in an archived thread. Each recap is one agent
-turn; set **Recap provider** and **Recap model** to a small, cheap model.
+**Recap archived threads**, off by default, has a hidden agent with the
+archived thread's own provider read each thread you archive and save its
+memories like any other. It needs auto-save on, since nobody reviews a form in
+an archived thread. Each recap is one agent turn.
 
 Agents pick up new tools and the brief when their session starts, so threads
 that were already open before you installed or updated the plugin need a new
@@ -116,14 +123,15 @@ as, its workspaces, and its token from `lobu whoami --json --include-tokens`,
 the same source the Lobu Mac app reads. A Lobu on this machine takes the
 worker token its `lobu run` minted.
 
-Memory writes use Lobu's own tools: `save_memory` to save, and `run_sdk` with
-`knowledge.delete` to undo. Searches use
-`search_memory`. What the plugin saved, project links, pins, and each
-thread's log stay in the plugin's bb storage. Recaps read the archived thread through bb's
-own thread API. CLI tokens stay in the bb server process; the page never
-receives one. "Open in Lobu" links to Lobu's events page filtered by the ids
-of the memories bb saved (`content_ids`), so it shows them to whoever is
-signed in to Lobu in that browser.
+Memory writes use Lobu's own tools: `save_memory` to save or supersede, and
+`run_sdk` with `knowledge.delete` to undo. Searches use `search_memory`, and
+`read_knowledge` reconciles edits and deletes made in Lobu and hydrates saved
+memories from linked workspaces. What the plugin saved, project links, pins,
+and each thread's log stay in the plugin's bb storage. Recaps read the archived
+thread through bb's own thread API. CLI tokens stay in the bb server process;
+the page never receives one. "Open in Lobu" links to Lobu's events page
+filtered by the ids of the memories bb saved (`content_ids`), so it shows them
+to whoever is signed in to Lobu in that browser.
 
 ## Settings
 

@@ -14,6 +14,8 @@ export const memoryDraftSchema = z.object({
   evidence: z.string().trim().max(500).nullish(),
   /** Workspace slug or name the memory belongs to; null lets the server pick. Absent on older queued drafts. */
   workspace: z.string().trim().min(1).nullish(),
+  /** Event id of an older saved memory this one corrects or replaces (shown in lobu_search and the project brief). */
+  replacesEventId: z.number().int().positive().nullish(),
 });
 export type MemoryDraft = z.infer<typeof memoryDraftSchema>;
 

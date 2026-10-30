@@ -34,7 +34,8 @@
         "plus": "./icons/plus.svg",
         "close": "./icons/close.svg",
         "given": "./icons/given.svg",
-        "folder": "./icons/folder.svg"
+        "folder": "./icons/folder.svg",
+        "share": "./icons/share.svg"
       }
     },
     "server": "./server.ts",

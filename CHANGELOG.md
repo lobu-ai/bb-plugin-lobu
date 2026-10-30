@@ -41,7 +41,17 @@
   skipping anything Lobu already holds. Turn off **Save memories
   automatically** to review each save in a form instead.
 - A Lobu memory panel in each thread shows what it started with, looked up,
-  and saved, with undo and pin on every saved memory.
+  and saved, with undo, pin, and one-click sharing to the project's linked
+  team workspace on every saved memory, plus remove buttons on learned brief
+  rows.
+- `lobu_remember` accepts `replacesEventId` (`supersedes_event_id`) to replace
+  an outdated memory in Lobu and drop the stale entry from the project brief.
+- Added `bb lobu search` and `bb lobu remember` plugin CLI commands so ACP
+  agent providers without native plugin tools participate in the same memory
+  loop.
+- Saved memories and pins reconcile against Lobu's `read_knowledge` (pruning
+  tombstoned memories, updating superseded ones, and hydrating saved memories
+  from linked workspaces).
 
 - The plugin runs the `lobu` CLI with your login shell's `PATH`. bb opened
   from the Dock only sees launchd's minimal `PATH`, so a CLI that needs a

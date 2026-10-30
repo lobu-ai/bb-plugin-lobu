@@ -145,6 +145,9 @@ function RememberFields({
               {row.workspace === null || row.workspace === undefined || row.workspace === "" ? null : (
                 <p className="text-xs text-muted-foreground">Suggested workspace: {row.workspace}</p>
               )}
+              {row.replacesEventId === null || row.replacesEventId === undefined ? null : (
+                <p className="text-xs text-muted-foreground">Replaces memory {row.replacesEventId}</p>
+              )}
             </div>
           </li>
         ))}

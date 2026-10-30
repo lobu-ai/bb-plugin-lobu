@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { BbPluginApi } from "@get-bb/plugin-sdk";
+import type { BbPluginApi, PluginCliRegistration } from "@get-bb/plugin-sdk";
 import plugin from "../server";
 
 // Runs the real plugin server against a fake bb host, a fake `lobu` CLI, and a
@@ -16,6 +16,7 @@ interface StoredMemory {
   content: string;
   kind: string;
   deleted: boolean;
+  supersededBy: number | null;
 }
 
 const lobu = {
@@ -53,6 +54,26 @@ beforeAll(() => {
       const [, workspace, tool] = match as unknown as [string, string, string];
       const body = (await request.json()) as Record<string, unknown>;
       if (tool === "save_memory") {
+        const supersedesId = typeof body.supersedes_event_id === "number" ? body.supersedes_event_id : null;
+        if (supersedesId !== null) {
+          const target = lobu.memories.find((m) => m.id === supersedesId && m.workspace === workspace);
+          if (target === undefined) return Response.json({ error: `Cannot supersede event ${supersedesId}` }, { status: 404 });
+          if (target.supersededBy !== null || target.deleted) {
+            return Response.json({ error: `Event ${supersedesId} already superseded` }, { status: 409 });
+          }
+          const id = lobu.nextId++;
+          target.supersededBy = id;
+          lobu.memories.push({
+            id,
+            workspace,
+            title: String(body.title),
+            content: String(body.content),
+            kind: String(body.semantic_type),
+            deleted: false,
+            supersededBy: null,
+          });
+          return Response.json({ id, view_url: `/${workspace}/events/${id}` });
+        }
         const id = lobu.nextId++;
         lobu.memories.push({
           id,
@@ -61,6 +82,7 @@ beforeAll(() => {
           content: String(body.content),
           kind: String(body.semantic_type),
           deleted: false,
+          supersededBy: null,
         });
         return Response.json({ id, view_url: `/${workspace}/events/${id}` });
       }
@@ -68,7 +90,7 @@ beforeAll(() => {
         const query = String(body.query);
         lobu.searches.push({ workspace, query });
         const content = lobu.memories
-          .filter((m) => m.workspace === workspace && !m.deleted)
+          .filter((m) => m.workspace === workspace && !m.deleted && m.supersededBy === null)
           .map((m) => ({ m, score: similarity(query, m) }))
           .filter(({ score }) => score > 0)
           .sort((a, b) => b.score - a.score)
@@ -81,6 +103,63 @@ beforeAll(() => {
             occurred_at: "2026-10-01T00:00:00.000Z",
             platform: "lobu",
             workspace_slug: m.workspace,
+          }));
+        return Response.json({ content });
+      }
+      if (tool === "read_knowledge") {
+        const requestedIds = Array.isArray(body.content_ids) ? (body.content_ids as number[]) : null;
+        if (requestedIds !== null) {
+          const resolved = new Map<number, StoredMemory>();
+          for (const seed of requestedIds) {
+            let cur = lobu.memories.find((m) => m.id === seed && m.workspace === workspace);
+            while (cur !== undefined && !resolved.has(cur.id)) {
+              resolved.set(cur.id, cur);
+              cur = cur.supersededBy === null ? undefined : lobu.memories.find((m) => m.id === cur!.supersededBy && m.workspace === workspace);
+            }
+          }
+          const content = [...resolved.values()].flatMap((m) => {
+            const tombstoneId = m.deleted ? m.id + 100_000 : null;
+            const row = {
+              id: m.id,
+              title: m.title,
+              text_content: m.content,
+              semantic_type: m.kind,
+              occurred_at: "2026-10-01T00:00:00.000Z",
+              platform: "lobu",
+              superseded_by: m.deleted ? tombstoneId : m.supersededBy,
+              is_superseded: m.deleted || m.supersededBy !== null,
+            };
+            if (!m.deleted) return [row];
+            return [
+              row,
+              {
+                id: tombstoneId!,
+                title: null,
+                text_content: "",
+                semantic_type: "tombstone",
+                occurred_at: "2026-10-01T00:00:01.000Z",
+                platform: "lobu",
+                superseded_by: null,
+                is_superseded: false,
+              },
+            ];
+          });
+          return Response.json({ content });
+        }
+        const limit = typeof body.limit === "number" ? body.limit : 50;
+        const content = lobu.memories
+          .filter((m) => m.workspace === workspace && !m.deleted && m.supersededBy === null)
+          .slice(-limit)
+          .reverse()
+          .map((m) => ({
+            id: m.id,
+            title: m.title,
+            text_content: m.content,
+            semantic_type: m.kind,
+            occurred_at: "2026-10-01T00:00:00.000Z",
+            platform: "lobu",
+            superseded_by: null,
+            is_superseded: false,
           }));
         return Response.json({ content });
       }
@@ -145,6 +224,7 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
   const tools = new Map<string, Tool>();
   let instructions: ((ctx: { threadId: string; projectId: string }) => string | null) | null = null;
   let rpc: Record<string, (input: unknown) => unknown> = {};
+  let cli: PluginCliRegistration | null = null;
   const formRequests: unknown[] = [];
   const values = { autoSave: true, recapOnArchive: false, ...overrides };
   const bb = {
@@ -177,6 +257,11 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
         instructions = provider;
       },
     },
+    cli: {
+      register: (registration: PluginCliRegistration) => {
+        cli = registration;
+      },
+    },
     rpc: {
       register: (_contract: unknown, handlers: typeof rpc) => {
         rpc = handlers;
@@ -196,7 +281,9 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
   await new Promise((resolve) => setTimeout(resolve, 20));
   const call = (name: string, params: unknown, threadId = "thread-1") =>
     tools.get(name)!.execute(params, { threadId, projectId: "proj-1", signal: new AbortController().signal });
-  return { kv, rpc, call, formRequests, brief: (threadId: string) => instructions!({ threadId, projectId: "proj-1" }) };
+  const runCli = (argv: string[], threadId = "thread-1") =>
+    cli!.run(argv, { threadId, projectId: "proj-1", signal: new AbortController().signal });
+  return { kv, rpc, call, runCli, formRequests, brief: (threadId: string) => instructions!({ threadId, projectId: "proj-1" }) };
 }
 
 const deployGotcha = {
@@ -326,5 +413,142 @@ describe("the memory loop", () => {
     } finally {
       rmSync(marker);
     }
+  });
+
+  test("supersedes stale memories, exposes bb lobu CLI for ACP agents, shares to team, and reconciles Lobu edits", async () => {
+    lobu.memories.length = 0;
+    lobu.searches.length = 0;
+    lobu.nextId = 2000;
+
+    const { rpc, call, runCli, brief } = await startPlugin();
+
+    // 1. Save an initial memory via bb lobu remember CLI (the ACP agent fallback).
+    const firstCli = await runCli(
+      [
+        "remember",
+        "--title",
+        "Staging uses port 8080",
+        "--content",
+        "Staging listens on port 8080 behind the proxy.",
+        "--kind",
+        "fact",
+        "--evidence",
+        "Agent: curl localhost:8080 succeeded",
+        "--json",
+      ],
+      "thread-acp-1",
+    );
+    expect(firstCli.exitCode).toBe(0);
+    const firstParsed = JSON.parse(firstCli.stdout ?? "{}") as { ok: boolean; saved: { eventId: number; title: string }[] };
+    expect(firstParsed.ok).toBe(true);
+    expect(firstParsed.saved).toHaveLength(1);
+    const firstId = firstParsed.saved[0]!.eventId;
+
+    // Brief includes the memory and its eventId so later sessions can supersede it.
+    expect(brief("thread-acp-2")).toContain(`Staging uses port 8080 (memory ${firstId})`);
+
+    // 2. Search via bb lobu search CLI logs the lookup and increments usage count.
+    const searchCli = await runCli(["search", "staging port", "--json"], "thread-acp-2");
+    expect(searchCli.exitCode).toBe(0);
+    const searchParsed = JSON.parse(searchCli.stdout ?? "{}") as { ok: boolean; results: { eventId: number }[] };
+    expect(searchParsed.results.map((r) => r.eventId)).toContain(firstId);
+    const afterCliSearch = (await rpc.threadMemory!({ threadId: "thread-acp-1" })) as {
+      saved: { eventId: number; uses: number }[];
+    };
+    expect(afterCliSearch.saved.find((r) => r.eventId === firstId)?.uses).toBe(1);
+
+    // 3. Supersede the stale memory via replacesEventId (--replaces-id).
+    const replaceCli = await runCli(
+      [
+        "remember",
+        "--title",
+        "Staging uses port 9090",
+        "--content",
+        "Correction: staging moved to port 9090; 8080 is only the metrics sidecar.",
+        "--kind",
+        "fact",
+        "--evidence",
+        "Agent: healthcheck moved to :9090",
+        "--replaces-id",
+        String(firstId),
+        "--json",
+      ],
+      "thread-acp-2",
+    );
+    expect(replaceCli.exitCode).toBe(0);
+    const replaceParsed = JSON.parse(replaceCli.stdout ?? "{}") as { saved: { eventId: number }[] };
+    const replacementId = replaceParsed.saved[0]!.eventId;
+    expect(replacementId).not.toBe(firstId);
+    expect(lobu.memories.find((m) => m.id === firstId)?.supersededBy).toBe(replacementId);
+
+    // The superseded memory is gone from the brief; only the correction remains.
+    const updatedBrief = brief("thread-acp-3")!;
+    expect(updatedBrief).toContain("Staging uses port 9090");
+    expect(updatedBrief).not.toContain("Staging uses port 8080");
+
+    // 4. Link team workspace and one-click share the memory to team.
+    await rpc.linkProject!({ projectId: "proj-1", workspace: "team" });
+    const shared = (await rpc.shareMemory!({ eventId: replacementId, workspace: "team" })) as {
+      eventId: number;
+      workspace: string;
+    };
+    expect(shared.workspace).toBe("team");
+    expect(lobu.memories.find((m) => m.id === shared.eventId)?.workspace).toBe("team");
+
+    // 5. External save in linked team workspace + external edit & tombstone in Lobu sync back into bb.
+    const teammateId = lobu.nextId++;
+    lobu.memories.push({
+      id: teammateId,
+      workspace: "team",
+      title: "Run migrations with make db-migrate",
+      content: "Teammate note saved from Claude Desktop in the team workspace.",
+      kind: "decision",
+      deleted: false,
+      supersededBy: null,
+    });
+    // Simulate editing replacementId directly in Lobu's web UI.
+    const webEditedId = lobu.nextId++;
+    lobu.memories.find((m) => m.id === replacementId)!.supersededBy = webEditedId;
+    lobu.memories.push({
+      id: webEditedId,
+      workspace: "me",
+      title: "Staging uses port 9091",
+      content: "Edited in Lobu web UI to port 9091.",
+      kind: "fact",
+      deleted: false,
+      supersededBy: null,
+    });
+    // Simulate deleting the shared team copy directly in Lobu's web UI.
+    lobu.memories.find((m) => m.id === shared.eventId)!.deleted = true;
+
+    const synced = (await rpc.projectMemory!({ projectId: "proj-1" })) as {
+      project: { learned: { eventId: number | null; title: string }[] };
+    };
+    const learnedTitles = synced.project.learned.map((l) => l.title);
+    expect(learnedTitles).toContain("Run migrations with make db-migrate");
+    expect(learnedTitles).toContain("Staging uses port 9091");
+    expect(learnedTitles).not.toContain("Staging uses port 9090");
+
+    // Also verify lobu_remember tool directly supports replacesEventId.
+    const toolReplaced = String(
+      await call(
+        "lobu_remember",
+        {
+          memories: [
+            {
+              title: "Staging uses port 9092",
+              content: "Updated again via native tool.",
+              kind: "fact",
+              evidence: "User: switched staging port to 9092",
+              replacesEventId: webEditedId,
+            },
+          ],
+        },
+        "thread-acp-4",
+      ),
+    );
+    expect(toolReplaced).toContain("Staging uses port 9092");
+    expect(brief("thread-acp-5")).toContain("Staging uses port 9092");
+    expect(brief("thread-acp-5")).not.toContain("Staging uses port 9091");
   });
 });

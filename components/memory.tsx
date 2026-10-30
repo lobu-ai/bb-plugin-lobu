@@ -158,15 +158,19 @@ function Status({ error, notice }: { error: string | null; notice: string | null
 function SavedRow({
   record,
   projectName,
+  shareWorkspace,
   busy,
   onUndo,
   onPin,
+  onShare,
 }: {
   record: SavedRecord;
   projectName: string | null;
+  shareWorkspace: string | null;
   busy: boolean;
   onUndo: () => void;
   onPin: (() => void) | null;
+  onShare: (() => void) | null;
 }) {
   const title = <span className="font-medium">{record.title}</span>;
   return (
@@ -201,6 +205,9 @@ function SavedRow({
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+        {onShare === null || shareWorkspace === null ? null : (
+          <IconAction icon="lobu/share" label={`Share to ${shareWorkspace}`} onClick={onShare} disabled={busy} />
+        )}
         {onPin === null ? null : <IconAction icon="lobu/pin" label="Pin to this project" onClick={onPin} disabled={busy} />}
         <IconAction icon="lobu/undo" label="Undo: remove from Lobu" onClick={onUndo} disabled={busy} />
       </div>
@@ -208,15 +215,17 @@ function SavedRow({
   );
 }
 
-/** Undo and pin for a list of saved memories. */
+/** Undo, share, and pin for a list of saved memories. */
 function SavedList({
   records,
   projectNames,
+  shareWorkspace = null,
   empty,
   onChanged,
 }: {
   records: SavedRecord[];
   projectNames: Map<string, string>;
+  shareWorkspace?: string | null;
   empty: ReactNode;
   onChanged: () => void;
 }) {
@@ -233,40 +242,55 @@ function SavedList({
         <Empty>{empty}</Empty>
       ) : (
         <ul className="divide-y divide-border">
-          {records.map((record) => (
-            <SavedRow
-              key={record.eventId}
-              record={record}
-              projectName={record.projectId === null ? null : (projectNames.get(record.projectId) ?? null)}
-              busy={busy === String(record.eventId)}
-              onUndo={() =>
-                void run(String(record.eventId), async () => {
-                  await rpc.call("undoMemory", { eventId: record.eventId });
-                  onChanged();
-                  return `Removed "${record.title}". It stays recoverable in Lobu.`;
-                })
-              }
-              onPin={
-                record.projectId === null
-                  ? null
-                  : () =>
-                      void run(String(record.eventId), async () => {
-                        const project = await rpc.call("pinMemory", {
-                          projectId: record.projectId as string,
-                          item: {
-                            eventId: record.eventId,
-                            workspace: record.workspace,
-                            title: record.title,
-                            content: record.content,
-                            url: record.url,
-                          },
-                        });
-                        onChanged();
-                        return `Pinned to ${project.name}. New threads there start with it.`;
-                      })
-              }
-            />
-          ))}
+          {records.map((record) => {
+            const targetWorkspace =
+              shareWorkspace !== null && shareWorkspace !== record.workspace ? shareWorkspace : null;
+            return (
+              <SavedRow
+                key={record.eventId}
+                record={record}
+                projectName={record.projectId === null ? null : (projectNames.get(record.projectId) ?? null)}
+                shareWorkspace={targetWorkspace}
+                busy={busy === String(record.eventId)}
+                onUndo={() =>
+                  void run(String(record.eventId), async () => {
+                    await rpc.call("undoMemory", { eventId: record.eventId });
+                    onChanged();
+                    return `Removed "${record.title}". It stays recoverable in Lobu.`;
+                  })
+                }
+                onShare={
+                  targetWorkspace === null
+                    ? null
+                    : () =>
+                        void run(String(record.eventId), async () => {
+                          await rpc.call("shareMemory", { eventId: record.eventId, workspace: targetWorkspace });
+                          onChanged();
+                          return `Shared "${record.title}" to ${targetWorkspace}.`;
+                        })
+                }
+                onPin={
+                  record.projectId === null
+                    ? null
+                    : () =>
+                        void run(String(record.eventId), async () => {
+                          const project = await rpc.call("pinMemory", {
+                            projectId: record.projectId as string,
+                            item: {
+                              eventId: record.eventId,
+                              workspace: record.workspace,
+                              title: record.title,
+                              content: record.content,
+                              url: record.url,
+                            },
+                          });
+                          onChanged();
+                          return `Pinned to ${project.name}. New threads there start with it.`;
+                        })
+                }
+              />
+            );
+          })}
         </ul>
       )}
     </>
@@ -355,9 +379,30 @@ function ProjectContext({
             />
           ))}
           {project.learned.map((item) => (
-            <li key={`${item.workspace}-${item.eventId ?? item.title}`} className="flex items-start gap-2 py-2 text-sm">
+            <li
+              key={`${item.workspace}-${item.eventId ?? item.title}`}
+              className={cn(
+                "group flex items-start gap-2 py-2 text-sm",
+                item.eventId !== null && busy === `undo-${item.eventId}` && "opacity-50",
+              )}
+            >
               <Icon name="lobu/memory" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1">{item.title}</span>
+              {item.eventId === null ? null : (
+                <IconAction
+                  icon="lobu/close"
+                  label={`Remove "${item.title}" from brief and Lobu`}
+                  disabled={busy === `undo-${item.eventId}`}
+                  onClick={() =>
+                    void run(`undo-${item.eventId}`, async () => {
+                      await rpc.call("undoMemory", { eventId: item.eventId as number });
+                      const refreshed = await rpc.call("projectMemory", { projectId: project.id });
+                      onProject(refreshed.project);
+                      return `Removed "${item.title}". It stays recoverable in Lobu.`;
+                    })
+                  }
+                />
+              )}
             </li>
           ))}
         </ul>
@@ -576,6 +621,7 @@ export function ThreadMemoryPanel({ threadId }: { threadId: string }) {
         <SavedList
           records={data.saved}
           projectNames={names}
+          shareWorkspace={project?.workspace ?? null}
           onChanged={load}
           empty="Nothing saved from this thread yet."
         />

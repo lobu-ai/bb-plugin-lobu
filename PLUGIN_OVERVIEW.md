@@ -3,8 +3,14 @@ Keep what your agents learn in Lobu memory, without leaving bb.
 ## What you get
 
 - Threads start with their project's Lobu brief, agents search Lobu before
-  they work, and what they learn is saved to your personal Lobu workspace,
-  with undo and pin in each thread's Lobu memory panel.
+  they work, and what they learn is saved to your personal Lobu workspace —
+  with undo, pin, and one-click sharing to a linked team workspace in each
+  thread's Lobu memory panel.
+- Agents can supersede outdated memories in place, and edits or deletes made in
+  Lobu sync back into your project brief.
+- Works across every agent provider in bb: native `lobu_search` and
+  `lobu_remember` tools plus `bb lobu search` and `bb lobu remember` CLI
+  commands for ACP providers.
 - **Save to Lobu** on any message, and **Save learnings to Lobu** for a whole
   thread, through a review form.
 - **Open what bb saved in Lobu** opens Lobu's own page of those memories.

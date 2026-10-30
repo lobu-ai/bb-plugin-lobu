@@ -97,6 +97,11 @@ export const rpcContract = defineRpcContract({
     input: z.object({ eventId: z.number() }),
     output: z.object({ removed: z.boolean() }),
   },
+  /** Copies a saved memory into another reachable workspace, such as a project's linked team workspace. */
+  shareMemory: {
+    input: z.object({ eventId: z.number(), workspace: z.string().min(1) }),
+    output: z.object({ eventId: z.number(), workspace: z.string(), url: z.string().nullable() }),
+  },
   pinMemory: {
     input: z.object({ projectId: z.string(), item: pinInputSchema }),
     output: projectMemorySchema,

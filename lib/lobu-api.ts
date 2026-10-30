@@ -22,6 +22,7 @@ export interface SaveMemoryInput {
   content: string;
   semantic_type: string;
   idempotency_key: string;
+  supersedes_event_id?: number;
 }
 
 export interface SavedMemory {
@@ -255,6 +256,26 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
         include_content: true,
         include_connections: false,
         include_public_catalogs: false,
+      });
+    },
+
+    /** Recent current saved memories (platform=lobu) in one workspace, newest first. */
+    async listMemories(context: string | null, workspace: string, limit: number): Promise<unknown> {
+      return request(context, `/api/${encodeURIComponent(workspace)}/read_knowledge`, {
+        platforms: ["lobu"],
+        semantic_type: ["fact", "decision", "preference", "observation", "note"],
+        sort_by: "date",
+        sort_order: "desc",
+        limit,
+        include_total: false,
+      });
+    },
+
+    /** Exact event lineages for saved event ids, including supersede and tombstone chains. */
+    async readEvents(context: string | null, workspace: string, ids: number[]): Promise<unknown> {
+      return request(context, `/api/${encodeURIComponent(workspace)}/read_knowledge`, {
+        content_ids: ids,
+        limit: Math.min(Math.max(ids.length * 3, 50), 200),
       });
     },
 
