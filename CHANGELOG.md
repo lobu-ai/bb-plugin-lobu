@@ -25,6 +25,9 @@
 - Thread memory logs stay inside the plugin's storage limit: hits keep a short
   excerpt and the oldest threads drop off, so a thread's Lobu panel no longer
   loses its "Looked up" history.
+- Resolving a picked item refreshes for at most 1.5 seconds and then answers
+  from what the menu already knows, so a feed lookup that takes Lobu four to
+  six seconds no longer holds the message.
 
 ## 0.5.0
 
