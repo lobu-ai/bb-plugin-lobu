@@ -143,7 +143,7 @@ export default async function plugin(bb: BbPluginApi) {
     automations: (AutomationItem & { workspace: string })[];
     connections: (ConnectionItem & { workspace: string })[];
     devices: DeviceItem[];
-    tabs: (TabItem & { workspace: string; connectionId: number })[];
+    tabs: (TabItem & { workspace: string; connectionId: number; connectionName: string })[];
   }
 
   /** Mention search reads from here: list endpoints are too slow to run per keystroke under the host's time box. */
@@ -177,15 +177,26 @@ export default async function plugin(bb: BbPluginApi) {
     ]);
   }
 
-  /** One chrome-bridge tab listing, giving up fast so one sleeping browser never blocks the @-menu. */
+  /**
+   * One chrome-bridge tab listing, bounded so a sleeping browser never holds
+   * the fill. The timer is cleared on success: a 200-tab browser answers in
+   * about a second, and waiting out the bound would delay every fill.
+   */
   async function listTabsBounded(context: string | null, workspace: string, connectionId: number): Promise<TabItem[]> {
-    const settled = await Promise.allSettled([
-      api.listTabs(context, workspace, connectionId),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("list_tabs timed out")), 1500)),
-    ]);
-    const first = settled[0];
-    if (first === undefined || first.status !== "fulfilled") return [];
-    return first.value;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const listed = await Promise.race([
+        api.listTabs(context, workspace, connectionId),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("list_tabs timed out")), 5000);
+        }),
+      ]);
+      return listed;
+    } catch {
+      return [];
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   async function fillMentionLists(): Promise<MentionLists> {
@@ -227,16 +238,32 @@ export default async function plugin(bb: BbPluginApi) {
       next.connections.push(...result.value.connections);
     }
     const chrome = next.connections.filter((connection) => connection.connectorKey === "chrome");
+    const previousTabs = mentionCache?.tabs ?? [];
     const tabsSettled = await Promise.allSettled(
       chrome.map(async (connection) => {
         const tabs = await listTabsBounded(ownerOf(owners, connection.workspace).context, connection.workspace, connection.id);
-        return tabs.map((tab) => ({ ...tab, workspace: connection.workspace, connectionId: connection.id }));
+        return tabs.map((tab) => ({
+          ...tab,
+          workspace: connection.workspace,
+          connectionId: connection.id,
+          connectionName: connection.displayName,
+        }));
       }),
     );
-    for (const result of tabsSettled) {
-      if (result.status !== "fulfilled") continue;
-      next.tabs.push(...result.value);
-    }
+    tabsSettled.forEach((result, index) => {
+      const connection = chrome[index];
+      if (connection === undefined) return;
+      if (result.status === "fulfilled" && result.value.length > 0) {
+        next.tabs.push(...result.value);
+        return;
+      }
+      // A sleeping browser or a slow bridge: keep what we last saw for it.
+      next.tabs.push(
+        ...previousTabs.filter(
+          (tab) => tab.workspace === connection.workspace && tab.connectionId === connection.id,
+        ),
+      );
+    });
     mentionCache = next;
     return next;
   }
@@ -970,7 +997,7 @@ export default async function plugin(bb: BbPluginApi) {
         .filter((feed) =>
           matchQuery([feed.displayName, feed.feedKey, feed.connectorName, feed.connectorKey, feed.workspace], query),
         )
-        .slice(0, 8)
+        .slice(0, 4)
         .map((feed) => {
           const connector = connectorLabel(feed);
           const rawKey = looksLikeIdentifier(feed.displayName) ? feed.displayName : null;
@@ -1026,7 +1053,7 @@ export default async function plugin(bb: BbPluginApi) {
       const { automations } = lists;
       return automations
         .filter((automation) => matchQuery([automation.name, automation.workspace], query))
-        .slice(0, 8)
+        .slice(0, 4)
         .map((automation) => ({
           id: `auto:${automation.workspace}:${automation.id}`,
           title: automation.name,
@@ -1111,7 +1138,7 @@ export default async function plugin(bb: BbPluginApi) {
             ]),
           };
         });
-      return [...deviceItems, ...connectionItems].slice(0, 8);
+      return [...deviceItems, ...connectionItems].slice(0, 4);
     } catch (cause) {
       return [];
     }
@@ -1166,13 +1193,17 @@ export default async function plugin(bb: BbPluginApi) {
       const lists = await mentionsForSearch();
       if (lists === null) return [];
       const { tabs } = lists;
+      // Tabs come from every paired browser; name the browser when there is
+      // more than one so "WhatsApp" is clearly the Mac mini's, not the MacBook's.
+      const browsers = new Set(tabs.map((tab) => tab.connectionName));
+      const nameBrowser = browsers.size > 1;
       return tabs
-        .filter((tab) => matchQuery([tab.title, tab.url], query))
-        .slice(0, 8)
+        .filter((tab) => matchQuery([tab.title, tab.url, tab.connectionName], query))
+        .slice(0, 4)
         .map((tab) => ({
           id: `tab:${tab.workspace}:${tab.connectionId}:${tab.tabId}`,
           title: tab.title,
-          subtitle: tab.url,
+          subtitle: subtitleFor(tab.title, [nameBrowser ? tab.connectionName : null, tab.url]),
         }));
     } catch {
       return [];
@@ -1207,6 +1238,21 @@ export default async function plugin(bb: BbPluginApi) {
     search: ({ query, projectId }) => mentionMemoryItems(query, projectId),
     resolve: (itemId) => resolveMemoryItem(itemId),
   });
+  // The composer shows only the first few rows across every provider, so the
+  // providers that answer "what am I looking at right now" come first:
+  // browser tabs and the connections/devices behind them.
+  bb.ui.registerMentionProvider({
+    id: "lobu-tab",
+    label: "Browser tabs",
+    search: ({ query }) => mentionTabItems(query),
+    resolve: (itemId) => resolveTabItem(itemId),
+  });
+  bb.ui.registerMentionProvider({
+    id: "lobu-connection",
+    label: "Lobu connections",
+    search: ({ query }) => mentionConnectionItems(query),
+    resolve: (itemId) => resolveConnectionItem(itemId),
+  });
   bb.ui.registerMentionProvider({
     id: "lobu-feed",
     label: "Lobu feeds",
@@ -1218,18 +1264,6 @@ export default async function plugin(bb: BbPluginApi) {
     label: "Lobu automations",
     search: ({ query }) => mentionAutomationItems(query),
     resolve: (itemId) => resolveAutomationItem(itemId),
-  });
-  bb.ui.registerMentionProvider({
-    id: "lobu-connection",
-    label: "Lobu connections",
-    search: ({ query }) => mentionConnectionItems(query),
-    resolve: (itemId) => resolveConnectionItem(itemId),
-  });
-  bb.ui.registerMentionProvider({
-    id: "lobu-tab",
-    label: "Browser tabs",
-    search: ({ query }) => mentionTabItems(query),
-    resolve: (itemId) => resolveTabItem(itemId),
   });
 
   bb.agents.registerTool({

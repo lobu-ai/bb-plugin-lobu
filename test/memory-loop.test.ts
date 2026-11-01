@@ -833,20 +833,43 @@ describe("the memory loop", () => {
       status: "active",
       error_message: null,
     });
+    // A second paired browser: tabs must say which machine they come from.
+    lobu.connections.push({
+      workspace: "me",
+      organization_id: "me",
+      id: 480,
+      display_name: "Chrome \u2014 Mac mini",
+      connector_key: "chrome",
+      connector_name: "Chrome",
+      status: "active",
+      error_message: null,
+    });
     lobu.tabs.push(
       { workspace: "me", connection_id: 479, tab_id: 101, title: "Inbox", url: "https://mail.google.com/mail/u/0/#inbox", window_id: 1, active: false },
       { workspace: "me", connection_id: 479, tab_id: 102, title: "Lobu \u2014 Memory", url: "https://app.lobu.ai/buremba", window_id: 1, active: true },
+      { workspace: "me", connection_id: 480, tab_id: 201, title: "(2) WhatsApp", url: "https://web.whatsapp.com/", window_id: 9, active: true },
     );
 
     const { mentions } = await startPlugin();
     const byId = (id: string) => mentions.find((p) => p.id === id)!;
     expect(mentions.map((p) => p.id).sort()).toEqual(["lobu-automation", "lobu-connection", "lobu-feed", "lobu-memory", "lobu-tab"]);
 
-    const tabSearch = byId("lobu-tab").search as (ctx: unknown) => Promise<{ id: string; title: string }[]>;
+    const tabSearch = byId("lobu-tab").search as (ctx: unknown) => Promise<{ id: string; title: string; subtitle?: string }[]>;
     const tabResolve = byId("lobu-tab").resolve as (id: string) => Promise<{ context: string }>;
     await warmMentions(tabSearch as (ctx: unknown) => Promise<unknown[]>);
-    expect((await tabSearch({ query: "", projectId: null })).map((item) => item.id)).toEqual(["tab:me:479:101", "tab:me:479:102"]);
-    expect((await tabSearch({ query: "mail", projectId: null })).map((item) => item.id)).toEqual(["tab:me:479:101"]);
+    expect((await tabSearch({ query: "", projectId: null })).map((item) => item.id)).toEqual([
+      "tab:me:479:101",
+      "tab:me:479:102",
+      "tab:me:480:201",
+    ]);
+    const mailTab = (await tabSearch({ query: "mail", projectId: null }))[0];
+    expect(mailTab?.id).toBe("tab:me:479:101");
+    expect(mailTab?.subtitle).toContain("Chrome \u2014 MacBook");
+    const miniTab = (await tabSearch({ query: "whatsapp", projectId: null }))[0];
+    expect(miniTab?.id).toBe("tab:me:480:201");
+    expect(miniTab?.title).toBe("(2) WhatsApp");
+    expect(miniTab?.subtitle).toContain("Chrome \u2014 Mac mini");
+    expect(miniTab?.subtitle).toContain("https://web.whatsapp.com/");
     const tabCtx = (await tabResolve("tab:me:479:102")).context;
     expect(tabCtx).toContain("Lobu \u2014 Memory");
     expect(tabCtx).toContain("https://app.lobu.ai/buremba");
