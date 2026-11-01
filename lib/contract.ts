@@ -10,6 +10,15 @@ import {
   threadMemorySchema,
 } from "./memory-contract";
 
+const contextSchema = z.object({
+  name: z.string(),
+  origin: z.string(),
+  /** Lobu Cloud, Lobu on this machine, or another Lobu, by origin like the Mac app. */
+  kind: z.enum(["cloud", "local", "other"]),
+  loggedIn: z.boolean(),
+  current: z.boolean(),
+});
+
 const setupStatusSchema = z.object({
   cli: z.discriminatedUnion("state", [
     z.object({ state: z.literal("missing") }),
@@ -17,7 +26,7 @@ const setupStatusSchema = z.object({
     z.object({ state: z.literal("outdated"), version: z.string() }),
     z.object({ state: z.literal("ready"), version: z.string() }),
   ]),
-  /** The install command the button runs; null when neither bun nor npm is found. */
+  /** Install the Lobu CLI button command; null when neither bun nor npm is found. */
   installCommand: z.string().nullable(),
   /** The command to show when the button cannot run or fails. */
   manualCommand: z.string(),
@@ -25,15 +34,19 @@ const setupStatusSchema = z.object({
   login: z
     .object({
       context: z.string().nullable(),
-      /** Lobu Cloud (the CLI's `lobu` context), Lobu on this machine (`local`), or another Lobu. */
+      /** Lobu Cloud, Lobu on this machine, or another Lobu, by origin like the Mac app. */
       kind: z.enum(["cloud", "local", "other"]),
       origin: z.string(),
       /** Who it is signed in as; null when it is not signed in. */
       account: z.string().nullable(),
       personal: z.string().nullable(),
       problem: z.string().nullable(),
+      /** True when the local Lobu here belongs to the Mac app (open it to start); null unless kind is local. */
+      localBelongsToMacApp: z.boolean().nullable(),
     })
     .nullable(),
+  /** Every CLI context, the active one first; empty when the CLI cannot list them. */
+  contexts: z.array(contextSchema),
   /** bb started Lobu on this machine and it has not stopped. */
   starting: z.boolean(),
 });
@@ -52,9 +65,14 @@ export const rpcContract = defineRpcContract({
     input: z.object({}),
     output: z.object({ error: z.string().nullable() }),
   },
-  /** Uses Lobu Cloud and starts its `lobu login`; the page waits for `setupStatus` to show it signed in. */
+  /** Uses Lobu Cloud, reusing a signed-in Cloud context when one exists. Starts its `lobu login` otherwise; the page waits for `setupStatus` to show it signed in. */
   useCloud: {
     input: z.object({}),
+    output: approvalSchema,
+  },
+  /** Switches bb to an existing CLI context, signing it in when needed. Reuses rather than duplicates. */
+  useLogin: {
+    input: z.object({ name: z.string().trim().min(1).max(64) }),
     output: approvalSchema,
   },
   /** Uses Lobu on this machine, starting it when it is not running. `error` says why it cannot start. */
@@ -71,6 +89,32 @@ export const rpcContract = defineRpcContract({
   savedLink: {
     input: z.object({}),
     output: z.object({ url: z.string().nullable(), count: z.number() }),
+  },
+  /** Newest inbox notifications in the login's personal workspace, with the unread count and a link to all of them in Lobu. */
+  inbox: {
+    input: z.object({ cursor: z.number().int().min(0).nullable().optional() }),
+    output: z.object({
+      workspace: z.string(),
+      unreadCount: z.number(),
+      notifications: z.array(
+        z.object({
+          id: z.number(),
+          type: z.string(),
+          title: z.string(),
+          body: z.string().nullable(),
+          resourceUrl: z.string().nullable(),
+          isRead: z.boolean(),
+          createdAt: z.string(),
+        }),
+      ),
+      nextCursor: z.number().nullable(),
+      url: z.string().nullable(),
+    }),
+  },
+  /** Marks one inbox notification read in its workspace. */
+  markNotificationRead: {
+    input: z.object({ notificationId: z.number().int().min(1), workspace: z.string().min(1) }),
+    output: z.object({ read: z.boolean() }),
   },
   /** Opens the review form in a thread with text the user picked. */
   remember: {

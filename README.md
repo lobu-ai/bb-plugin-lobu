@@ -14,13 +14,22 @@ thread screen walks you through setup, one button at a time:
    with sudo, then checks that `lobu --version` runs. If that fails, or
    neither tool is found, the card shows the command to run yourself and a
    **Check again** button. An older CLI gets an **Update** button instead.
-2. **Choose where your memory lives**, as in the Lobu Mac app:
-   - **Use Lobu Cloud** runs `lobu login --context lobu`, which opens Lobu's
-     approval page in your browser. You can create a Lobu account there too.
-     The card updates once you approve.
-   - **Run Lobu on this machine** uses a local Lobu that is already serving
-     (the Mac app's, or your own `lobu run`) through the `local` CLI context.
-     Otherwise it starts `lobu run` in `~/lobu-bb`, a project whose `.env`
+2. **Choose where your memory lives**, as in the Lobu Mac app. The card shows
+   a collapsible **CONTEXT** section listing the `lobu` CLI contexts it
+   already knows — one row per context with its name and origin, a checkmark
+   on the login bb uses, and a "Signed in" badge on the others that are
+   ready. (Open while bb is not connected; tucked away once it is.)
+   Clicking a row switches bb to it, signing in or starting it when needed.
+   Add a new context with `lobu context add` in a terminal; the card picks
+   it up.
+   - **Use Lobu Cloud** appears only when no Cloud login exists yet. Otherwise
+     pick a Cloud row: it reuses that login, signing in there when needed,
+     which opens Lobu's approval page in your browser. You can create a Lobu
+     account there too. The card updates once you approve.
+   - **Run Lobu on this machine** appears only when no local Lobu exists yet.
+     Otherwise the local row starts it: it uses a local Lobu that is already
+     serving (the Mac app's, or your own `lobu run`) through the `local` CLI
+     context, or starts `lobu run` in `~/lobu-bb`, a project whose `.env`
      holds the key Lobu encrypts stored secrets with, and stops it when bb
      stops. `lobu run` signs the `local` context in by itself. The Mac app's
      own project (`~/lobu`) keeps its key in the Keychain, so bb never starts
@@ -29,16 +38,18 @@ thread screen walks you through setup, one button at a time:
 
 The same steps live on in Settings → Plugins → Lobu, in a **Lobu account**
 section: which Lobu bb uses, who it is signed in as, the workspace agents
-save to, and how many memories bb has saved there, with a link to them. Switch
-between Lobu Cloud and Lobu on this machine there, or pick **Another Lobu…**
-to add a self-hosted Lobu by name and URL, which adds a `lobu` CLI context
-and signs it in the same way.
+save to, and how many memories bb has saved there, with a link to them. It lists every CLI context bb knows, like the Mac app's CONTEXT section, so switching is one click. Add a new context with `lobu context add` in a terminal; the plugin picks it up on its next check.
 
 ## Memory
 
 Agents in bb forget everything when a thread ends. The plugin keeps the
 useful parts in your Lobu memory and hands them back to the next thread, so
 a gotcha found once is not rediscovered every week.
+
+When bb is connected, the New thread screen also shows your **Inbox**: unread
+Lobu notifications in the login's personal workspace, newest first, with an
+**Open** link into Lobu and **Mark read** per item. It stays quiet when there
+is nothing to show.
 
 It works as a loop:
 
@@ -97,6 +108,17 @@ an archived thread. Each recap is one agent turn.
 Agents pick up new tools and the brief when their session starts, so threads
 that were already open before you installed or updated the plugin need a new
 thread first.
+
+## Mentioning Lobu things in chat
+
+Type `@` in any bb composer to reference Lobu without pasting: saved
+memories, feeds, automations, paired devices and connections, and open
+browser tabs each get their own menu section. Picking one inserts a pill;
+at send time the plugin resolves it into fresh agent-only context (the full
+memory text, a feed or automation status summary, a device or connection
+status, the tab's title and URL). Resolving never
+blocks the send on a stale reference — an unreachable item degrades to a
+short note instead.
 
 ## Requirements
 

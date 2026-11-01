@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- Setup reuses the Lobu logins you already have instead of creating new ones.
+  The Connect card and Settings → Plugins → Lobu list every `lobu` CLI context
+  as a collapsible **CONTEXT** list with a checkmark on the login bb uses, so
+  switching is one click; **Use Lobu Cloud** and **Run Lobu on this machine**
+  only appear when no such login exists yet. The card names the login in use
+  and stays out of the way once bb is connected.
+- The New thread screen shows your **Inbox** when bb is connected: unread Lobu
+  notifications in the personal workspace, loaded when you open it, with a
+  retry when it fails and nothing at all when it is empty.
+- Type `@` in a composer to reference Lobu without pasting: memories, feeds,
+  automations, paired devices and connections, and open browser tabs each get
+  their own section. Picking one inserts a pill; at send time the plugin
+  resolves it into fresh agent-only context. An unreachable item degrades to a
+  short note instead of blocking the send.
+- Feeds, automations, connections, devices, and browser tabs are read through
+  Lobu's tool endpoints. A mention search answers from a warm cache, so it
+  never outlives the time the composer gives it.
+
 ## 0.5.0
 
 - Setup is built in. A **Connect Lobu memory** card on the New thread screen

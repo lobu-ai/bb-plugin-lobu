@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseWhoami } from "../lib/lobu-api";
-import { LOCAL_PORT, localFolders, localPort, startLocal } from "../lib/local";
+import { LOCAL_PORT, localFolders, localPort, macAppOwnsLocal, startLocal } from "../lib/local";
 
 const whoami = (fields: Record<string, unknown>) =>
   JSON.stringify({ loggedIn: true, local: false, organizations: [{ slug: "me", name: "Me" }, { slug: "team" }], personalOrgSlug: "me", ...fields });
@@ -51,6 +51,33 @@ describe("localPort", () => {
   test("falls back to the Mac app's default", () => {
     expect(localPort(null)).toBe(LOCAL_PORT);
     expect(localPort("https://lobu.example.com")).toBe(LOCAL_PORT);
+  });
+});
+
+describe("macAppOwnsLocal", () => {
+  let home: string;
+  afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+  test("true when only the Mac app's data dir is here, so bb must not start it", () => {
+    home = mkdtempSync(join(tmpdir(), "lobu-local-"));
+    const folders = localFolders(home);
+    mkdirSync(join(folders.macApp, "data"), { recursive: true });
+    expect(macAppOwnsLocal(folders)).toBe(true);
+  });
+
+  test("false once bb has its own project", () => {
+    home = mkdtempSync(join(tmpdir(), "lobu-local-"));
+    const folders = localFolders(home);
+    mkdirSync(join(folders.macApp, "data"), { recursive: true });
+    expect(macAppOwnsLocal(folders)).toBe(true);
+    mkdirSync(folders.bb, { recursive: true });
+    writeFileSync(join(folders.bb, ".env"), "ENCRYPTION_KEY=abc\n");
+    expect(macAppOwnsLocal(folders)).toBe(false);
+  });
+
+  test("false on a fresh machine with neither", () => {
+    home = mkdtempSync(join(tmpdir(), "lobu-local-"));
+    expect(macAppOwnsLocal(localFolders(home))).toBe(false);
   });
 });
 

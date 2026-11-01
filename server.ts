@@ -7,11 +7,11 @@
 // CLI, then sign in to Lobu Cloud or run Lobu on this machine.
 import { type BbPluginApi, cliCommand, defineCli, PluginCliError, type PluginThreadEventPayloads } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { rpcContract } from "./lib/contract";
+import { rpcContract, type SetupStatus } from "./lib/contract";
 import { CLI_MAJOR, FALLBACK_INSTALL, LobuSetupError, userHome } from "./lib/cli";
 import type { ChildProcess } from "node:child_process";
-import { createLobuApi, lobuOrigin } from "./lib/lobu-api";
-import { hasProject, isServing, lastLogLine, LOCAL_CONTEXT, localFolders, localPort, startLocal } from "./lib/local";
+import { createLobuApi, kindOfOrigin, lobuOrigin, pickCloudContext, pickOriginContext, type AutomationItem, type CliContext, type ConnectionItem, type DeviceItem, type FeedItem, type TabItem } from "./lib/lobu-api";
+import { hasProject, isServing, lastLogLine, LOCAL_CONTEXT, localFolders, localPort, macAppOwnsLocal, startLocal } from "./lib/local";
 import {
   type MemoryDraft,
   type MemoryHit,
@@ -81,6 +81,17 @@ const SETUP_HINT = "Connect Lobu from the card on bb's New thread screen, or und
 /** What agents hear while Lobu is not connected; the user sees the setup card on the New thread screen instead. */
 const NOT_CONNECTED = "Lobu is not connected, so its memory is unavailable. Continue without it.";
 
+/** The setup card's view of one CLI context, like the Lobu Mac app's login list. */
+function describeContext(context: CliContext) {
+  return {
+    name: context.name,
+    origin: context.origin,
+    kind: kindOfOrigin(context.origin),
+    loggedIn: context.loggedIn,
+    current: context.current,
+  };
+}
+
 const LEARN_PROMPT =
   "Look back over this thread and call lobu_remember with the learnings worth keeping across sessions: decisions, non-obvious facts or gotchas, and preferences I stated as standing rules. Most threads contain nothing worth keeping; if so, say so instead of calling the tool. Never propose what this thread built or changed, anything the repo or code already states, generic quality wishes, or task requirements restated as preferences. At most three short, self-contained memories, each with a short evidence quote of the turn or finding it came from. Skip anything temporary, obvious from the code, already saved to Lobu, or sensitive.";
 
@@ -118,13 +129,158 @@ export default async function plugin(bb: BbPluginApi) {
   async function useLogin(context: string): Promise<void> {
     await bb.storage.kv.set(LOGIN_KEY, context);
     reach = null;
+    mentionCache = null;
   }
 
-  /** The CLI context bb uses (null: the CLI's active one) and the Lobu origin it signs in to. */
-  async function resolveLogin(): Promise<{ context: string | null; origin: string }> {
+  interface MentionLists {
+    at: number;
+    /**
+     * Human workspace names by slug. Shown only when the login reaches more
+     * than one, where "which org is this in" is a real question.
+     */
+    workspaceNames: Record<string, string>;
+    feeds: (FeedItem & { workspace: string })[];
+    automations: (AutomationItem & { workspace: string })[];
+    connections: (ConnectionItem & { workspace: string })[];
+    devices: DeviceItem[];
+    tabs: (TabItem & { workspace: string; connectionId: number; connectionName: string })[];
+  }
+
+  /** Mention search reads from here: list endpoints are too slow to run per keystroke under the host's time box. */
+  let mentionCache: MentionLists | null = null;
+  /** Feeding the @-menu under the host's time box needs these lists warm: list_feeds alone takes seconds cold. Warmed on inbox/thread/project views; searches never wait on a refresh. */
+  const MENTION_CACHE_TTL_MS = 120_000;
+
+  /** Feeds, automations, connections, and devices for the login bb uses, cached briefly for @-mention filtering. */
+  let mentionFlight: Promise<MentionLists> | null = null;
+  async function mentionLists(): Promise<MentionLists> {
+    if (mentionCache !== null && Date.now() - mentionCache.at < MENTION_CACHE_TTL_MS) return mentionCache;
+    mentionFlight ??= fillMentionLists().finally(() => {
+      mentionFlight = null;
+    });
+    return mentionFlight;
+  }
+
+  /**
+   * The @-menu holds each provider to ~2s. A list fetch (list_feeds alone takes
+   * seconds cold) cannot fit that, so a search only ever reads a warm cache: it
+   * waits briefly for a fill already in flight, otherwise answers from what it
+   * has and lets the fill finish in the background. Never rejects.
+   */
+  async function mentionsForSearch(): Promise<MentionLists | null> {
+    if (mentionCache !== null && Date.now() - mentionCache.at < MENTION_CACHE_TTL_MS) return mentionCache;
+    const flight = mentionLists().catch(() => null);
+    if (mentionCache !== null) return mentionCache;
+    return Promise.race([
+      flight,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 400)),
+    ]);
+  }
+
+  /**
+   * One chrome-bridge tab listing, bounded so a sleeping browser never holds
+   * the fill. The timer is cleared on success: a 200-tab browser answers in
+   * about a second, and waiting out the bound would delay every fill.
+   */
+  async function listTabsBounded(context: string | null, workspace: string, connectionId: number): Promise<TabItem[]> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const listed = await Promise.race([
+        api.listTabs(context, workspace, connectionId),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("list_tabs timed out")), 5000);
+        }),
+      ]);
+      return listed;
+    } catch {
+      return [];
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  async function fillMentionLists(): Promise<MentionLists> {
+    if (mentionCache !== null && Date.now() - mentionCache.at < MENTION_CACHE_TTL_MS) return mentionCache;
+    const owners = await memoryOwners();
+    if (owners.size === 0) throw new Error(`No Lobu workspace is available. ${SETUP_HINT}`);
+    const settled = await Promise.allSettled(
+      [...owners.keys()].map(async (slug) => {
+        const context = ownerOf(owners, slug).context;
+        // One endpoint failing (an automations timeout, say) must not take the
+        // other two sections down with it.
+        const [feeds, automations, connections] = await Promise.allSettled([
+          api.listFeeds(context, slug, 50),
+          api.listAutomations(context, slug, 50),
+          api.listConnections(context, slug),
+        ]);
+        return {
+          feeds: (feeds.status === "fulfilled" ? feeds.value : []).map((feed) => ({ ...feed, workspace: slug })),
+          automations: (automations.status === "fulfilled" ? automations.value : []).map((automation) => ({
+            ...automation,
+            workspace: slug,
+          })),
+          connections: (connections.status === "fulfilled" ? connections.value : []).map((connection) => ({
+            ...connection,
+            workspace: slug,
+          })),
+        };
+      }),
+    );
+    const personal = personalOf(owners);
+    const devices = await api
+      .listDevices(personal?.owner.context ?? [...owners.values()][0]?.context ?? null)
+      .catch((): DeviceItem[] => []);
+    const next: MentionLists = {
+      at: Date.now(),
+      workspaceNames: Object.fromEntries([...owners].map(([slug, owner]) => [slug, owner.name])),
+      feeds: [],
+      automations: [],
+      connections: [],
+      devices,
+      tabs: [],
+    };
+    for (const result of settled) {
+      if (result.status !== "fulfilled") continue;
+      next.feeds.push(...result.value.feeds);
+      next.automations.push(...result.value.automations);
+      next.connections.push(...result.value.connections);
+    }
+    const chrome = next.connections.filter((connection) => connection.connectorKey === "chrome");
+    const previousTabs = mentionCache?.tabs ?? [];
+    const tabsSettled = await Promise.allSettled(
+      chrome.map(async (connection) => {
+        const tabs = await listTabsBounded(ownerOf(owners, connection.workspace).context, connection.workspace, connection.id);
+        return tabs.map((tab) => ({
+          ...tab,
+          workspace: connection.workspace,
+          connectionId: connection.id,
+          connectionName: connection.displayName,
+        }));
+      }),
+    );
+    tabsSettled.forEach((result, index) => {
+      const connection = chrome[index];
+      if (connection === undefined) return;
+      if (result.status === "fulfilled" && result.value.length > 0) {
+        next.tabs.push(...result.value);
+        return;
+      }
+      // A sleeping browser or a slow bridge: keep what we last saw for it.
+      next.tabs.push(
+        ...previousTabs.filter(
+          (tab) => tab.workspace === connection.workspace && tab.connectionId === connection.id,
+        ),
+      );
+    });
+    mentionCache = next;
+    return next;
+  }
+
+  /** The CLI context bb uses (null: the CLI's active one) and the Lobu origin it signs in to. Pass the already-listed contexts to skip re-spawning the CLI. */
+  async function resolveLogin(listed?: CliContext[] | null): Promise<{ context: string | null; origin: string }> {
     const chosen = await chosenLogin();
-    const listed = await api.cliContexts();
-    const entry = listed?.find((c) => (chosen === "" ? c.current : c.name === chosen));
+    const contexts = listed ?? (await api.cliContexts());
+    const entry = contexts?.find((c) => (chosen === "" ? c.current : c.name === chosen));
     const context = chosen === "" ? (entry?.name ?? null) : chosen;
     const origin = entry?.origin ?? (context === LOCAL_CONTEXT ? `http://localhost:${localPort(null)}` : DEFAULT_ORIGIN);
     useApi(origin);
@@ -161,10 +317,11 @@ export default async function plugin(bb: BbPluginApi) {
     localChild?.kill("SIGTERM");
   });
   // Back on after a restart, the way the Mac app starts its Lobu at launch.
+  // NOTE: no mention-cache prefetch here on purpose — the first warmup happens
+  // on inbox/thread/project views so startup stays race-free for syncLobuMemories.
   if ((await chosenLogin()) === LOCAL_CONTEXT && hasProject(folders)) {
     void ensureLocal().catch((cause: unknown) => bb.log.warn(`Lobu on this machine did not start: ${String(cause)}`));
   }
-
   // ---- Memory loop state. The in-process copy is the source of truth; every
   // change is written through to plugin storage in order.
   const memory = {
@@ -327,8 +484,8 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
-  /** Searches the personal workspace and the project's linked one, best first. */
-  async function searchLobu(projectId: string | null, query: string, limit: number): Promise<MemoryHit[]> {
+  /** Searches the personal workspace and the project's linked one, best first. No logging or use counting — mentions and agents share this. */
+  async function findMemories(projectId: string | null, query: string, limit: number): Promise<MemoryHit[]> {
     const owners = await memoryOwners();
     const targets = new Set<string>();
     const personal = personalOf(owners);
@@ -657,7 +814,7 @@ export default async function plugin(bb: BbPluginApi) {
   ): Promise<{ connected: boolean; hits: MemoryHit[]; text: string }> {
     if ((await memoryOwners()).size === 0) return { connected: false, hits: [], text: NOT_CONNECTED };
     const projectId = ctx.projectId ?? (ctx.threadId === null ? null : await projectOfThread(ctx.threadId));
-    const hits = await searchLobu(projectId, query, limit);
+    const hits = await findMemories(projectId, query, limit);
     const now = Date.now();
     if (ctx.threadId !== null) {
       memory.logs = capThreadLogs({ ...memory.logs, [ctx.threadId]: addSearch(memory.logs[ctx.threadId], { query, at: now, results: hits }) });
@@ -680,6 +837,457 @@ export default async function plugin(bb: BbPluginApi) {
       .join("\n");
     return { connected: true, hits, text };
   }
+
+  interface MentionRow {
+    id: string;
+    title: string;
+    subtitle?: string;
+  }
+
+  /** Saved memory in "mem:workspace:eventId" item ids for @-mentions. Never throws. */
+  async function mentionMemoryItems(query: string, projectId: string | null): Promise<MentionRow[]> {
+    try {
+      const owners = await memoryOwners();
+      if (owners.size === 0) return [];
+      const orgLabel = (slug: string): string => (owners.size > 1 ? (owners.get(slug)?.name ?? slug) : "");
+      if (query.trim() === "") {
+        const targets = new Set<string>();
+        const personal = personalOf(owners);
+        if (personal !== null) targets.add(personal.slug);
+        const linked = projectId === null ? undefined : memory.links[projectId];
+        if (linked !== undefined && owners.has(linked)) targets.add(linked);
+        return memory.saved
+          .filter((record) => targets.has(record.workspace))
+          .slice(-8)
+          .reverse()
+          .map((record) => ({
+            id: `mem:${record.workspace}:${record.eventId}`,
+            title: record.title,
+            subtitle: orgLabel(record.workspace),
+          }));
+      }
+      // The @-menu holds each provider to ~2s, and a remote search can take
+      // seconds while a cold search model loads. Match the local copy first so
+      // the menu always answers, then merge remote hits that land in the box.
+      const local: MentionRow[] = memory.saved
+        .filter((record) => owners.has(record.workspace) && matchQuery([record.title, record.content], query))
+        .slice(-8)
+        .reverse()
+        .map((record) => ({
+          id: `mem:${record.workspace}:${record.eventId}`,
+          title: record.title,
+          subtitle: orgLabel(record.workspace),
+        }));
+      const remote = await Promise.race([
+        findMemories(projectId, query, 8).catch(() => []),
+        new Promise<never[]>((resolve) => setTimeout(() => resolve([]), 700)),
+      ]);
+      const seen = new Set(local.map((item) => item.id));
+      for (const hit of remote) {
+        const id = `mem:${hit.workspace}:${hit.eventId}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        local.push({ id, title: hit.title, subtitle: hit.workspace });
+      }
+      return local.slice(0, 8);
+    } catch (cause) {
+      return [];
+    }
+  }
+
+  function parseKnowledgeRow(row: unknown): { id: number; title: string; body: string } | null {
+    if (typeof row !== "object" || row === null) return null;
+    const record = row as Record<string, unknown>;
+    if (typeof record.id !== "number") return null;
+    return {
+      id: record.id,
+      title: typeof record.title === "string" && record.title !== "" ? record.title : `Memory ${record.id}`,
+      body:
+        typeof record.text_content === "string" ? record.text_content.replace(/\s+/g, " ").trim().slice(0, 600) : "",
+    };
+  }
+
+  /** Full memory text for an @-mention. Never throws: throwing would block the send. */
+  async function resolveMemoryItem(itemId: string): Promise<{ context: string }> {
+    const fail = "That Lobu memory is currently unreachable in Lobu. Continue without it.";
+    try {
+      const match = /^mem:([^:]+):(\d+)$/.exec(itemId);
+      if (match === null || match[1] === undefined || match[2] === undefined) {
+        return { context: "Unknown Lobu memory reference." };
+      }
+      const workspace = match[1];
+      const eventId = Number(match[2]);
+      // Prefer the local copy: full content with no network round trip.
+      const record = memory.saved.find((r) => r.workspace === workspace && r.eventId === eventId);
+      if (record !== undefined) {
+        const lines = [`- ${record.title} (${workspace} memory ${eventId})`, `  ${record.content.replace(/\s+/g, " ").trim()}`];
+        if (record.url !== null) lines.push(`  ${record.url}`);
+        return { context: lines.join("\n") };
+      }
+      const owners = await memoryOwners();
+      const owner = owners.get(workspace);
+      if (owner === undefined) return { context: fail };
+      const result = (await api.readEvents(owner.context, workspace, [eventId])) as { content?: unknown[] };
+      const row = (Array.isArray(result.content) ? result.content : [])
+        .map((candidate) => parseKnowledgeRow(candidate))
+        .find((candidate) => candidate !== null && candidate.id === eventId);
+      if (row === undefined || row === null) return { context: "That Lobu memory is no longer available in Lobu." };
+      return { context: [`- ${row.title} (${workspace} memory ${eventId})`, `  ${row.body}`].join("\n") };
+    } catch {
+      return { context: fail };
+    }
+  }
+
+  function matchQuery(haystacks: (string | null)[], query: string): boolean {
+    const q = query.trim().toLowerCase();
+    if (q === "") return true;
+    return haystacks.some((haystack) => (haystack ?? "").toLowerCase().includes(q));
+  }
+
+  /**
+   * Lobu stores some display names as bare keys ("spaces/3eodnKAAAAE"), so a
+   * row that showed them verbatim would read as an id. Those keep the key as a
+   * subtitle and lead with the connector's human name instead.
+   */
+  function looksLikeIdentifier(value: string): boolean {
+    const trimmed = value.trim();
+    return trimmed !== "" && !/\s/.test(trimmed) && /[\/:_]/.test(trimmed);
+  }
+
+  /** "Gmail", or the connector key when Lobu has no display name for it. */
+  function connectorLabel(connector: { connectorName: string | null; connectorKey: string | null }): string | null {
+    return connector.connectorName ?? connector.connectorKey;
+  }
+
+  /** Lobu's page for a connection: its own card when we know the connector, else the list. */
+  function connectionUrl(
+    baseUrl: string,
+    workspace: string,
+    connectorKey: string | null,
+    connectionId: number | null,
+  ): string {
+    const root = `${baseUrl}/${encodeURIComponent(workspace)}/connectors`;
+    if (connectorKey === null) return root;
+    const connector = `${root}/${encodeURIComponent(connectorKey)}`;
+    return connectionId === null ? connector : `${connector}/${connectionId}`;
+  }
+
+  /** The org a row lives in, but only when the login reaches more than one. */
+  function workspaceLabel(lists: MentionLists, workspace: string): string | null {
+    if (Object.keys(lists.workspaceNames).length < 2) return null;
+    return lists.workspaceNames[workspace] ?? workspace;
+  }
+
+  /** Words of a label, keeping emails and slugs whole ("me@ex.com" is one word). */
+  function labelWords(value: string): Set<string> {
+    return new Set(
+      value
+        .toLowerCase()
+        .split(/[^\p{L}\p{N}@._-]+/u)
+        .filter((word) => word !== ""),
+    );
+  }
+
+  /**
+   * Joins the parts of a subtitle, dropping empties, repeats, and anything the
+   * row's title already says, so a row never reads "Gmail — Gmail · active".
+   */
+  function subtitleFor(title: string, parts: (string | null)[]): string {
+    const titleWords = labelWords(title);
+    const seen = new Set<string>();
+    const kept: string[] = [];
+    for (const part of parts) {
+      const trimmed = part?.trim() ?? "";
+      const key = trimmed.toLowerCase();
+      if (trimmed === "" || seen.has(key)) continue;
+      seen.add(key);
+      const words = labelWords(trimmed);
+      if (words.size > 0 && [...words].every((word) => titleWords.has(word))) continue;
+      kept.push(trimmed);
+    }
+    return kept.join(" · ");
+  }
+
+  /** Feeds in "feed:workspace:id" item ids for @-mentions. Never throws. */
+  async function mentionFeedItems(query: string): Promise<MentionRow[]> {
+    try {
+      const lists = await mentionsForSearch();
+      if (lists === null) return [];
+      const { feeds } = lists;
+      return feeds
+        .filter((feed) =>
+          matchQuery([feed.displayName, feed.feedKey, feed.connectorName, feed.connectorKey, feed.workspace], query),
+        )
+        .slice(0, 4)
+        .map((feed) => {
+          const connector = connectorLabel(feed);
+          const rawKey = looksLikeIdentifier(feed.displayName) ? feed.displayName : null;
+          const title = rawKey === null ? feed.displayName : (connector ?? feed.displayName);
+          return {
+            id: `feed:${feed.workspace}:${feed.id}`,
+            title,
+            subtitle: subtitleFor(title, [
+              rawKey === null ? connector : rawKey,
+              workspaceLabel(lists, feed.workspace),
+              feed.status,
+            ]),
+          };
+        });
+    } catch (cause) {
+      return [];
+    }
+  }
+
+  /** Fresh feed summary for an @-mention. Never throws: throwing would block the send. */
+  async function resolveFeedItem(itemId: string): Promise<{ context: string }> {
+    const fail = "That Lobu feed is currently unreachable in Lobu. Continue without it.";
+    try {
+      const match = /^feed:([^:]+):(\d+)$/.exec(itemId);
+      if (match === null || match[1] === undefined || match[2] === undefined) {
+        return { context: "Unknown Lobu feed reference." };
+      }
+      const workspace = match[1];
+      const feedId = Number(match[2]);
+      const owners = await memoryOwners();
+      const owner = owners.get(workspace);
+      if (owner === undefined) return { context: fail };
+      const { origin: baseUrl } = await reachLobu();
+      const feed = (await api.listFeeds(owner.context, workspace, 100)).find((candidate) => candidate.id === feedId);
+      if (feed === undefined) return { context: "That Lobu feed is no longer available in Lobu." };
+      const lines = [
+        `Feed ${feed.displayName} (${feed.status}) in ${workspace} via ${feed.connectorKey ?? "an unknown connector"}.`,
+      ];
+      if (feed.lastError !== null) lines.push(`Last error: ${feed.lastError}`);
+      if (feed.itemsCollected !== null) lines.push(`Items collected: ${feed.itemsCollected}.`);
+      lines.push(`Open: ${connectionUrl(baseUrl, workspace, feed.connectorKey, feed.connectionId)}`);
+      return { context: lines.join("\n") };
+    } catch {
+      return { context: fail };
+    }
+  }
+
+  /** Automations in "auto:workspace:id" item ids for @-mentions. Never throws. */
+  async function mentionAutomationItems(query: string): Promise<MentionRow[]> {
+    try {
+      const lists = await mentionsForSearch();
+      if (lists === null) return [];
+      const { automations } = lists;
+      return automations
+        .filter((automation) => matchQuery([automation.name, automation.workspace], query))
+        .slice(0, 4)
+        .map((automation) => ({
+          id: `auto:${automation.workspace}:${automation.id}`,
+          title: automation.name,
+          subtitle: subtitleFor(automation.name, [workspaceLabel(lists, automation.workspace), automation.status]),
+        }));
+    } catch (cause) {
+      return [];
+    }
+  }
+
+  /** Fresh automation summary for an @-mention. Never throws: throwing would block the send. */
+  async function resolveAutomationItem(itemId: string): Promise<{ context: string }> {
+    const fail = "That Lobu automation is currently unreachable in Lobu. Continue without it.";
+    try {
+      const match = /^auto:([^:]+):([^:]+)$/.exec(itemId);
+      if (match === null || match[1] === undefined || match[2] === undefined) {
+        return { context: "Unknown Lobu automation reference." };
+      }
+      const workspace = match[1];
+      const automationId = match[2];
+      const owners = await memoryOwners();
+      const owner = owners.get(workspace);
+      if (owner === undefined) return { context: fail };
+      const { origin: baseUrl } = await reachLobu();
+      const automation = (await api.listAutomations(owner.context, workspace, 100)).find(
+        (candidate) => candidate.id === automationId,
+      );
+      if (automation === undefined) return { context: "That Lobu automation is no longer available in Lobu." };
+      const lines = [`Automation ${automation.name} (${automation.status}) in ${workspace}.`];
+      if (automation.triggers !== null && automation.triggers.length > 0) {
+        lines.push(`Triggers: ${automation.triggers.map((trigger) => trigger.kind).join(", ")}.`);
+      }
+      lines.push(
+        `Open: ${baseUrl}/${encodeURIComponent(workspace)}/automations/${encodeURIComponent(automation.id)}`,
+      );
+      return { context: lines.join("\n") };
+    } catch {
+      return { context: fail };
+    }
+  }
+
+  /** Devices ("dev:id") and connections ("conn:workspace:id") for @-mentions. Never throws. */
+  async function mentionConnectionItems(query: string): Promise<MentionRow[]> {
+    try {
+      const lists = await mentionsForSearch();
+      if (lists === null) return [];
+      const { devices, connections } = lists;
+      const deviceItems = devices
+        .filter((device) => matchQuery([device.label ?? device.workerId, device.platform], query))
+        .map((device) => ({
+          id: `dev:${device.id}`,
+          title: device.label ?? device.workerId,
+          subtitle: subtitleFor(device.label ?? device.workerId, [
+            device.platform === null ? null : device.platform.replace(/[-_]/g, " "),
+            device.online ? "online" : "offline",
+          ]),
+        }));
+      const connectionItems = connections
+        .filter((connection) =>
+          matchQuery(
+            [
+              connection.displayName,
+              connection.connectorName,
+              connection.connectorKey,
+              connection.account,
+              connection.deviceLabel,
+              connection.workspace,
+            ],
+            query,
+          ),
+        )
+        .map((connection) => {
+          const connector = connectorLabel(connection);
+          const rawKey = looksLikeIdentifier(connection.displayName) ? connection.displayName : null;
+          const title = rawKey === null ? connection.displayName : (connector ?? connection.displayName);
+          return {
+            id: `conn:${connection.workspace}:${connection.id}`,
+            title,
+            subtitle: subtitleFor(title, [
+              rawKey === null ? connector : rawKey,
+              connection.account ?? connection.deviceLabel,
+              workspaceLabel(lists, connection.workspace),
+              connection.status,
+            ]),
+          };
+        });
+      return [...deviceItems, ...connectionItems].slice(0, 4);
+    } catch (cause) {
+      return [];
+    }
+  }
+
+  /** Fresh device or connection status for an @-mention. Never throws: throwing would block the send. */
+  async function resolveConnectionItem(itemId: string): Promise<{ context: string }> {
+    const fail = "That Lobu connection is currently unreachable in Lobu. Continue without it.";
+    try {
+      const owners = await memoryOwners();
+      if (owners.size === 0) return { context: fail };
+      const personal = personalOf(owners);
+      const context = personal?.owner.context ?? [...owners.values()][0]?.context ?? null;
+      const deviceMatch = /^dev:(.+)$/.exec(itemId);
+      if (deviceMatch !== null && deviceMatch[1] !== undefined) {
+        const deviceId = deviceMatch[1];
+        const device = (await api.listDevices(context)).find((candidate) => candidate.id === deviceId);
+        if (device === undefined) return { context: "That Lobu device is no longer paired." };
+        const lines = [
+          `Device ${device.label ?? device.workerId} (${device.platform ?? "unknown platform"}): ${device.online ? "online" : "offline"}.`,
+        ];
+        if (device.lastSeenAt !== null) lines.push(`Last seen: ${device.lastSeenAt}.`);
+        if (device.capabilities.length > 0) lines.push(`Capabilities: ${device.capabilities.join(", ")}.`);
+        return { context: lines.join("\n") };
+      }
+      const connectionMatch = /^conn:([^:]+):(\d+)$/.exec(itemId);
+      if (connectionMatch === null || connectionMatch[1] === undefined || connectionMatch[2] === undefined) {
+        return { context: "Unknown Lobu connection reference." };
+      }
+      const workspace = connectionMatch[1];
+      const owner = owners.get(workspace);
+      if (owner === undefined) return { context: fail };
+      const { origin: baseUrl } = await reachLobu();
+      const connection = (await api.listConnections(owner.context, workspace)).find(
+        (candidate) => candidate.id === Number(connectionMatch[2]),
+      );
+      if (connection === undefined) return { context: "That Lobu connection is no longer available in Lobu." };
+      const lines = [
+        `Connection ${connection.displayName} via ${connection.connectorKey ?? "an unknown connector"} (${connection.status}) in ${workspace}.`,
+      ];
+      if (connection.errorMessage !== null) lines.push(`Error: ${connection.errorMessage}`);
+      lines.push(`Open: ${connectionUrl(baseUrl, workspace, connection.connectorKey, connection.id)}`);
+      return { context: lines.join("\n") };
+    } catch {
+      return { context: fail };
+    }
+  }
+
+  /** Open browser tabs in "tab:workspace:connectionId:tabId" item ids for @-mentions. Tabs ride the shared cache (bounded per-browser fetch, refreshed in the background); resolve re-lists live at send time. Never throws. */
+  async function mentionTabItems(query: string): Promise<MentionRow[]> {
+    try {
+      const lists = await mentionsForSearch();
+      if (lists === null) return [];
+      const { tabs } = lists;
+      // Tabs come from every paired browser; name the browser when there is
+      // more than one so "WhatsApp" is clearly the Mac mini's, not the MacBook's.
+      const browsers = new Set(tabs.map((tab) => tab.connectionName));
+      const nameBrowser = browsers.size > 1;
+      return tabs
+        .filter((tab) => matchQuery([tab.title, tab.url, tab.connectionName], query))
+        .slice(0, 4)
+        .map((tab) => ({
+          id: `tab:${tab.workspace}:${tab.connectionId}:${tab.tabId}`,
+          title: tab.title,
+          subtitle: subtitleFor(tab.title, [nameBrowser ? tab.connectionName : null, tab.url]),
+        }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Fresh tab title and URL for an @-mention, re-listed at send time since tabs move fast. Never throws: throwing would block the send. */
+  async function resolveTabItem(itemId: string): Promise<{ context: string }> {
+    const fail = "That browser tab is currently unreachable in Lobu. Continue without it.";
+    try {
+      const match = /^tab:([^:]+):(\d+):(\d+)$/.exec(itemId);
+      if (match === null || match[1] === undefined || match[2] === undefined || match[3] === undefined) {
+        return { context: "Unknown browser tab reference." };
+      }
+      const workspace = match[1];
+      const owners = await memoryOwners();
+      const owner = owners.get(workspace);
+      if (owner === undefined) return { context: fail };
+      const tab = (await api.listTabs(owner.context, workspace, Number(match[2]))).find(
+        (candidate) => candidate.tabId === Number(match[3]),
+      );
+      if (tab === undefined) return { context: "That browser tab is no longer open." };
+      return { context: `- ${tab.title} (${tab.url})` };
+    } catch {
+      return { context: fail };
+    }
+  }
+
+  bb.ui.registerMentionProvider({
+    id: "lobu-memory",
+    label: "Lobu memory",
+    search: ({ query, projectId }) => mentionMemoryItems(query, projectId),
+    resolve: (itemId) => resolveMemoryItem(itemId),
+  });
+  // The composer shows only the first few rows across every provider, so the
+  // providers that answer "what am I looking at right now" come first:
+  // browser tabs and the connections/devices behind them.
+  bb.ui.registerMentionProvider({
+    id: "lobu-tab",
+    label: "Browser tabs",
+    search: ({ query }) => mentionTabItems(query),
+    resolve: (itemId) => resolveTabItem(itemId),
+  });
+  bb.ui.registerMentionProvider({
+    id: "lobu-connection",
+    label: "Lobu connections",
+    search: ({ query }) => mentionConnectionItems(query),
+    resolve: (itemId) => resolveConnectionItem(itemId),
+  });
+  bb.ui.registerMentionProvider({
+    id: "lobu-feed",
+    label: "Lobu feeds",
+    search: ({ query }) => mentionFeedItems(query),
+    resolve: (itemId) => resolveFeedItem(itemId),
+  });
+  bb.ui.registerMentionProvider({
+    id: "lobu-automation",
+    label: "Lobu automations",
+    search: ({ query }) => mentionAutomationItems(query),
+    resolve: (itemId) => resolveAutomationItem(itemId),
+  });
 
   bb.agents.registerTool({
     name: "lobu_remember",
@@ -882,18 +1490,28 @@ export default async function plugin(bb: BbPluginApi) {
     };
   }
 
-  bb.rpc.register(rpcContract, {
-    setupStatus: async () => {
-      const cli = await api.cliState();
-      const installer = await api.installer();
+  // Concurrent card renders share one status computation instead of each
+  // re-spawning the CLI; the UI polls this every few seconds while waiting.
+  let setupFlight: Promise<SetupStatus> | null = null;
+  async function computeSetupStatus(): Promise<SetupStatus> {
+      const [cli, installer] = await Promise.all([api.cliState(), api.installer()]);
       const starting = localChild !== null;
-      const base = { cli, installCommand: installer?.command ?? null, manualCommand: FALLBACK_INSTALL, login: null, starting };
+      const listed = cli.state === "ready" ? ((await api.cliContexts()) ?? []) : [];
+      const contexts = listed.map(describeContext);
+      const base = { cli, installCommand: installer?.command ?? null, manualCommand: FALLBACK_INSTALL, login: null, contexts, starting };
       if (cli.state === "missing" || cli.state === "broken") return base;
-      const { context, origin } = await resolveLogin();
-      const kind = context === CLOUD_CONTEXT ? "cloud" : context === LOCAL_CONTEXT ? "local" : "other";
-      const signedOut = { context, kind, origin, account: null, personal: null } as const;
+      const { context, origin } = await resolveLogin(listed);
+      const kind = kindOfOrigin(origin);
+      const signedOut = {
+        context,
+        kind,
+        origin,
+        account: null,
+        personal: null,
+        localBelongsToMacApp: kind === "local" ? macAppOwnsLocal(folders) : null,
+      } as const;
       // Asking the CLI about a local Lobu that is down would only sign in again later.
-      if (context === LOCAL_CONTEXT && !(await isServing(origin))) {
+      if (kind === "local" && !(await isServing(origin))) {
         const problem = starting ? "Lobu on this machine is starting." : (localFailure ?? "Lobu on this machine is not running.");
         return { ...base, login: { ...signedOut, problem } };
       }
@@ -906,6 +1524,18 @@ export default async function plugin(bb: BbPluginApi) {
         const problem = cause instanceof Error ? cause.message : String(cause);
         return { ...base, login: { ...signedOut, problem } };
       }
+  }
+
+  bb.rpc.register(rpcContract, {
+    setupStatus: () => {
+      // The Lobu panel loads this on mount, right before the user types @:
+      // fill the mention lists now so the first search filters in memory
+      // instead of missing the host's time box.
+      void mentionLists().catch(() => undefined);
+      setupFlight ??= computeSetupStatus().finally(() => {
+        setupFlight = null;
+      });
+      return setupFlight;
     },
     installCli: async () => {
       try {
@@ -921,9 +1551,33 @@ export default async function plugin(bb: BbPluginApi) {
       return { error: `The install left lobu ${after.version}; bb needs ${CLI_MAJOR} or newer.` };
     },
     useCloud: async () => {
+      const listed = (await api.cliContexts()) ?? [];
+      const picked = pickCloudContext(listed, CLOUD_CONTEXT);
+      if (picked !== null) {
+        await useLogin(picked.name);
+        if (picked.loggedIn) return { approvalUrl: null };
+        return { approvalUrl: await api.signIn(picked.name) };
+      }
       await useLogin(CLOUD_CONTEXT);
-      const signedIn = (await api.cliContexts())?.some((c) => c.name === CLOUD_CONTEXT && c.loggedIn) ?? false;
-      return { approvalUrl: signedIn ? null : await api.signIn(CLOUD_CONTEXT) };
+      return { approvalUrl: await api.signIn(CLOUD_CONTEXT) };
+    },
+    useLogin: async ({ name }) => {
+      const listed = (await api.cliContexts()) ?? [];
+      const entry = listed.find((c) => c.name === name);
+      if (entry === undefined) throw new Error(`Unknown Lobu context ${name}.`);
+      if (kindOfOrigin(entry.origin) === "local" && !(await isServing(entry.origin))) {
+        if (entry.name !== LOCAL_CONTEXT) {
+          throw new Error(`The ${name} context points to ${entry.origin}, which is not serving. Start it, then try again.`);
+        }
+        try {
+          await ensureLocal();
+        } catch (cause) {
+          throw new Error(cause instanceof Error ? cause.message : String(cause));
+        }
+      }
+      await useLogin(entry.name);
+      if (entry.loggedIn) return { approvalUrl: null };
+      return { approvalUrl: await api.signIn(entry.name) };
     },
     useLocal: async () => {
       try {
@@ -937,6 +1591,22 @@ export default async function plugin(bb: BbPluginApi) {
     addLogin: async ({ name, url }) => {
       const origin = lobuOrigin(url);
       if (origin === null) throw new Error("Use an HTTPS Lobu URL, or HTTP on this machine.");
+      const listed = (await api.cliContexts()) ?? [];
+      const byName = listed.find((c) => c.name === name);
+      if (byName !== undefined) {
+        if (byName.origin !== origin) {
+          throw new Error(`The ${name} context already points to ${byName.origin}, not ${origin}. Pick a different name.`);
+        }
+        await useLogin(byName.name);
+        if (byName.loggedIn) return { approvalUrl: null };
+        return { approvalUrl: await api.signIn(byName.name) };
+      }
+      const byOrigin = pickOriginContext(listed, origin);
+      if (byOrigin !== null) {
+        await useLogin(byOrigin.name);
+        if (byOrigin.loggedIn) return { approvalUrl: null };
+        return { approvalUrl: await api.signIn(byOrigin.name) };
+      }
       const approvalUrl = await api.addContext(name, origin);
       await useLogin(name);
       return { approvalUrl };
@@ -947,6 +1617,35 @@ export default async function plugin(bb: BbPluginApi) {
       const path = savedEventsPath(memory.saved, new Set(owners.keys()));
       const count = memory.saved.filter((record) => owners.has(record.workspace)).length;
       return { url: path === null ? null : `${origin}${path}`, count };
+    },
+    inbox: async ({ cursor }) => {
+      const owners = await memoryOwners();
+      const personal = personalOf(owners);
+      if (personal === null) throw new Error(`No personal Lobu workspace is available. ${SETUP_HINT}`);
+      // Warm the @-mention lists while the user is looking at Lobu data: the
+      // next @ keystroke then filters in memory instead of fetching.
+      void mentionLists().catch(() => undefined);
+      const { origin: baseUrl } = await reachLobu();
+      const [unreadCount, listed] = await Promise.all([
+        api.unreadNotificationCount(personal.owner.context, personal.slug),
+        api.listNotifications(personal.owner.context, personal.slug, 20, cursor ?? null),
+      ]);
+      return {
+        workspace: personal.slug,
+        unreadCount,
+        notifications: listed.notifications.map((item) => ({
+          ...item,
+          resourceUrl: absoluteUrl(item.resourceUrl, baseUrl),
+        })),
+        nextCursor: listed.nextCursor,
+        url: `${baseUrl}/${personal.slug}`,
+      };
+    },
+    markNotificationRead: async ({ notificationId, workspace }) => {
+      const owners = await memoryOwners();
+      const owner = ownerOf(owners, workspace);
+      await api.markNotificationRead(owner.context, workspace, notificationId);
+      return { read: true };
     },
     remember: async ({ threadId, text }) => {
       // The form stays open until the user answers, so do not hold the RPC.
@@ -968,12 +1667,16 @@ export default async function plugin(bb: BbPluginApi) {
     projectMemory: async ({ projectId }) => {
       if (!projectNames.has(projectId)) await refreshProjects().catch(() => undefined);
       await syncLobuMemories();
+      // The user is looking at Lobu: warm the @-mention lists in the background
+      // so the first @ keystroke filters in memory instead of fetching.
+      void mentionLists().catch(() => undefined);
       return { ...(await workspaceOptions()), project: projectView(projectId) };
     },
     threadMemory: async ({ threadId }) => {
       const projectId = await projectOfThread(threadId);
       if (projectId !== null && !projectNames.has(projectId)) await refreshProjects().catch(() => undefined);
       await syncLobuMemories();
+      void mentionLists().catch(() => undefined);
       return {
         ...(await workspaceOptions()),
         project: projectId === null ? null : projectView(projectId),

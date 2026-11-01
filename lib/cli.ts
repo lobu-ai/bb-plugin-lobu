@@ -164,6 +164,10 @@ export function firstUrl(output: string): string | null {
 export function createCliRunner() {
   const home = userHome();
   let prepared: Promise<{ bin: string; dirs: string[]; env: NodeJS.ProcessEnv }> | null = null;
+  // `lobu --version` and the installer lookup never change without an
+  // install, so remember them instead of re-spawning the CLI per status poll.
+  let cliStateMemo: Promise<CliState> | null = null;
+  let installerMemo: Promise<Installer | null> | null = null;
   const prepare = () => {
     prepared ??= loginShellPath(process.env.SHELL).then((shellPath) => {
       const dirs = mergePath(shellPath, process.env.PATH, home);
@@ -181,21 +185,25 @@ export function createCliRunner() {
 
     /** Whether the CLI is installed, starts, and is new enough. */
     async state(): Promise<CliState> {
-      let output: string;
-      try {
-        output = await run(["--version"]);
-      } catch (error) {
-        const failure = cliFailure(error, null);
-        return failure.code === "cli_missing" ? { state: "missing" } : { state: "broken", detail: failure.message };
-      }
-      const version = output.trim().split("\n").pop()?.trim() ?? "";
-      const major = cliMajor(output);
-      if (major === null) return { state: "broken", detail: `lobu --version printed "${version}"` };
-      return major < CLI_MAJOR ? { state: "outdated", version } : { state: "ready", version };
+      cliStateMemo ??= (async () => {
+        let output: string;
+        try {
+          output = await run(["--version"]);
+        } catch (error) {
+          const failure = cliFailure(error, null);
+          return failure.code === "cli_missing" ? { state: "missing" } : { state: "broken", detail: failure.message };
+        }
+        const version = output.trim().split("\n").pop()?.trim() ?? "";
+        const major = cliMajor(output);
+        if (major === null) return { state: "broken", detail: `lobu --version printed "${version}"` };
+        return major < CLI_MAJOR ? { state: "outdated", version } : { state: "ready", version };
+      })();
+      return cliStateMemo;
     },
 
     async installer(): Promise<Installer | null> {
-      return findInstaller((await prepare()).dirs);
+      installerMemo ??= prepare().then((p) => findInstaller(p.dirs));
+      return installerMemo;
     },
 
     /** Installs or updates the CLI with bun or npm, never with sudo, then finds it again. */
@@ -212,6 +220,8 @@ export function createCliRunner() {
       } finally {
         // The binary may now live somewhere the cached lookup did not find it.
         prepared = null;
+        cliStateMemo = null;
+        installerMemo = null;
       }
     },
 

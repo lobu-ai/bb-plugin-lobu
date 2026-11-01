@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cliFailure, cliMajor, findInstaller, firstUrl, loginShellPath, mergePath, pathBetweenMarkers } from "../lib/cli";
@@ -75,6 +75,30 @@ describe("running the lobu CLI from a Dock-launched bb", () => {
     );
     expect(failure?.code).toBe("cli_failed");
     expect(failure?.message).toContain("missing-interpreter");
+  });
+
+  test("checks the CLI version once across repeated status polls", async () => {
+    const counter = join(root, "version-count");
+    writeFileSync(counter, "0");
+    const countingDir = join(root, "counting-only");
+    mkdirSync(countingDir);
+    script(
+      join(countingDir, "lobu"),
+      `#!/bin/sh\nif [ "$1" = --version ]; then n=$(cat "${counter}"); echo $((n + 1)) > "${counter}"; echo 24.2.0; exit 0; fi\nexit 1\n`,
+    );
+    script(
+      join(root, "login-shell-counting"),
+      `#!/bin/sh\nPATH="${countingDir}:${MINIMAL_PATH}"\nexport PATH\nshift\nexec /bin/sh -c "$1"\n`,
+    );
+    process.env.PATH = MINIMAL_PATH;
+    process.env.SHELL = join(root, "login-shell-counting");
+    process.env.HOME = root;
+    const api = createLobuApi({ baseUrl: "https://lobu.example.com" });
+    expect(await api.cliState()).toEqual({ state: "ready", version: "24.2.0" });
+    expect(await api.cliState()).toEqual({ state: "ready", version: "24.2.0" });
+    await api.installer();
+    await api.installer();
+    expect(readFileSync(counter, "utf8")).toBe("1\n");
   });
 });
 

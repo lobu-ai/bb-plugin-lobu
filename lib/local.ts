@@ -47,6 +47,14 @@ export async function isServing(origin: string): Promise<boolean> {
 export const hasProject = (folders: LocalFolders) => existsSync(join(folders.bb, ".env"));
 
 /**
+ * Whether the local Lobu here belongs to the Lobu Mac app (`~/lobu`), which
+ * only the Mac app can start — the same refusal `startLocal` throws, exposed
+ * so setup can say exactly that instead of a bare "not running".
+ */
+export const macAppOwnsLocal = (folders: LocalFolders) =>
+  !hasProject(folders) && existsSync(join(folders.macApp, "data"));
+
+/**
  * Starts `lobu run` in bb's project, creating the project with a new
  * ENCRYPTION_KEY the first time. Throws when the only local Lobu here is the
  * Mac app's, which only the Mac app can start.
@@ -57,7 +65,7 @@ export async function startLocal(
   port: number,
 ): Promise<ChildProcess> {
   if (!hasProject(folders)) {
-    if (existsSync(join(folders.macApp, "data"))) {
+    if (macAppOwnsLocal(folders)) {
       throw new Error("Your Lobu on this machine belongs to the Lobu app. Open the Lobu app to start it, then try again.");
     }
     mkdirSync(folders.bb, { recursive: true });

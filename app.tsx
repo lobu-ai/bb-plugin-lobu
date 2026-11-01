@@ -33,7 +33,7 @@ async function openReview(threadId: string, text: string) {
 export default definePluginApp((app) => {
   // The New thread screen: setup until bb is connected, then what a new
   // thread in the project starts with. Settings: the Lobu account.
-  app.slots.homepageSection({ id: "lobu", title: "Lobu memory", component: LobuHome });
+  app.slots.homepageSection({ id: "lobu", title: "Lobu", component: LobuHome });
   app.slots.settingsSection({
     id: "account",
     title: "Lobu account",
@@ -44,7 +44,7 @@ export default definePluginApp((app) => {
   // What this thread started with, looked up, and saved, with undo and pin.
   app.slots.threadPanelAction({
     id: "memory",
-    title: "Lobu memory",
+    title: "Lobu",
     icon: "lobu/memory",
     component: ThreadMemoryPanel,
   });
