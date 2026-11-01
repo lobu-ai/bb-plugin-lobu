@@ -40,6 +40,7 @@ const lobu = {
   devices: [] as Record<string, unknown>[],
   tabs: [] as Record<string, unknown>[],
   failFeeds: false,
+  failDevices: false,
   nextId: 1000,
 };
 
@@ -98,6 +99,7 @@ beforeAll(() => {
         return Response.json({ ok: true });
       }
       if (url.pathname === "/api/me/devices" && request.method === "GET") {
+        if (lobu.failDevices) return new Response("devices are down", { status: 500 });
         return Response.json({ devices: lobu.devices });
       }
       const match = url.pathname.match(/^\/api\/([^/]+)\/([a-z_]+)$/);
@@ -838,6 +840,12 @@ describe("the memory loop", () => {
     const chatRow = (await connSearch({ query: "google chat", projectId: null }))[0];
     expect(chatRow?.title).toBe("Google Chat");
     expect(chatRow?.subtitle).toContain("spaces/CAAAA");
+    // The devices endpoint failing must not lose the row the menu already has.
+    lobu.failDevices = true;
+    const staleDevice = (await connResolve("dev:dev-1")).context;
+    lobu.failDevices = false;
+    expect(staleDevice).toContain("MacBook");
+
     const devCtx = (await connResolve("dev:dev-1")).context;
     expect(devCtx).toContain("MacBook");
     expect(devCtx).toContain("online");
