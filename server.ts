@@ -179,23 +179,23 @@ export default async function plugin(bb: BbPluginApi) {
     ]);
   }
 
-  /** Visible text of a tab, bounded so a slow page cannot hold up a send. */
-  async function readTabTextBounded(
+  /** One tab's title, URL, and text, bounded so a slow page cannot hold up a send. */
+  async function readTabSnapshotBounded(
     context: string | null,
     workspace: string,
     connectionId: number,
     tabId: number,
-  ): Promise<string> {
+  ): Promise<{ title: string; url: string; text: string } | null> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
-        api.readTabText(context, workspace, connectionId, tabId, TAB_TEXT_CHARS),
-        new Promise<string>((resolve) => {
-          timer = setTimeout(() => resolve(""), 1500);
+        api.readTabSnapshot(context, workspace, connectionId, tabId, TAB_TEXT_CHARS),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), 2500);
         }),
       ]);
     } catch {
-      return "";
+      return null;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
@@ -1269,22 +1269,13 @@ export default async function plugin(bb: BbPluginApi) {
       const owners = await memoryOwners();
       const owner = owners.get(workspace);
       if (owner === undefined) return { context: fail };
-      const connectionId = Number(match[2]);
-      const tabId = Number(match[3]);
-      // The tab's own text is what makes the reference useful, but the send is
-      // waiting on this: read it alongside the re-listing and give up quietly.
-      const [listed, pageText] = await Promise.all([
-        api.listTabs(owner.context, workspace, connectionId).catch((): null => null),
-        readTabTextBounded(owner.context, workspace, connectionId, tabId),
-      ]);
-      const tab = listed === null ? undefined : listed.find((candidate) => candidate.tabId === tabId);
-      // The listing answered and the tab is gone: that is a closed tab, not a
-      // bridge hiccup. Only when the listing itself failed do we fall back to
-      // whatever the page read managed to return.
-      if (listed !== null && tab === undefined) return { context: "That browser tab is no longer open." };
-      if (tab === undefined && pageText === "") return { context: fail };
-      const lines = [tab === undefined ? `- Browser tab ${tabId}` : `- ${tab.title} (${tab.url})`];
-      if (pageText !== "") lines.push(`  Page text: ${pageText}`);
+      // One bridge call returns the tab's current title, URL, and page text, so
+      // the agent gets what the page says and the send waits on a single round
+      // trip. A tab the browser no longer has fails here, which is the answer.
+      const snapshot = await readTabSnapshotBounded(owner.context, workspace, Number(match[2]), Number(match[3]));
+      if (snapshot === null) return { context: "That browser tab is no longer open." };
+      const lines = [`- ${snapshot.title} (${snapshot.url})`];
+      if (snapshot.text !== "") lines.push(`  Page text: ${snapshot.text}`);
       return { context: lines.join("\n") };
     } catch {
       return { context: fail };

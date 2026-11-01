@@ -230,10 +230,14 @@ beforeAll(() => {
         });
       }
       if (tool === "manage_operations" && body.action === "execute" && body.operation_key === "evaluate") {
+        const input = body.input as { tab_id?: number } | undefined;
+        if (input?.tab_id === 999) return new Response("no such tab", { status: 404 });
         return Response.json({
           action: "execute",
           status: "completed",
-          output: { value: "Inbox  (17)  Primary  Social  Promotions" },
+          output: {
+            value: { title: "Lobu \u2014 Memory", url: "https://app.lobu.ai/buremba", text: "Inbox  (17)  Primary  Social  Promotions" },
+          },
         });
       }
       if (tool === "manage_operations" && body.action === "execute" && body.operation_key === "list_tabs") {
@@ -886,6 +890,7 @@ describe("the memory loop", () => {
     expect(tabCtx).toContain("https://app.lobu.ai/buremba");
     // The picked tab hands the agent what the page says, not just its address.
     expect(tabCtx).toContain("Page text: Inbox  (17)  Primary  Social  Promotions");
+    // A tab the browser no longer has is answered as closed, not half-resolved.
     expect((await tabResolve("tab:me:479:999")).context).toContain("no longer open");
   });
 });

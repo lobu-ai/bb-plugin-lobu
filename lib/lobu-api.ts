@@ -587,29 +587,39 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
     },
 
     /**
-     * The visible text of one open tab, so an @-mention can hand the agent what
-     * the page says instead of only its title. Empty when the bridge refuses
-     * (a chrome:// page, a closed tab, a sleeping browser).
+     * One open tab as it is right now: title, URL, and the page's visible text,
+     * read in a single bridge call. The agent learns what the page says instead
+     * of only where it is. Null when the tab is gone or the bridge refuses
+     * (a chrome:// page, a sleeping browser).
+     *
+     * One call on purpose: the bridge runs operations for a connection in
+     * order, so a `list_tabs` alongside this would queue ahead of it.
      */
-    async readTabText(
+    async readTabSnapshot(
       context: string | null,
       workspace: string,
       connectionId: number,
       tabId: number,
       maxChars: number,
-    ): Promise<string> {
+    ): Promise<{ title: string; url: string; text: string } | null> {
       const result = (await request(context, `/api/${encodeURIComponent(workspace)}/manage_operations`, {
         action: "execute",
         connection_id: connectionId,
         operation_key: "evaluate",
         input: {
           tab_id: tabId,
-          expression: `(() => { const text = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim(); return text.slice(0, ${Math.floor(maxChars)}); })()`,
+          expression: `(() => { const text = (document.body?.innerText ?? "").replace(/\\s+/g, " ").trim(); return { title: document.title, url: location.href, text: text.slice(0, ${Math.floor(maxChars)}) }; })()`,
           await_promise: false,
         },
       })) as { output?: { value?: unknown } };
       const value = result.output?.value;
-      return typeof value === "string" ? value.trim() : "";
+      if (typeof value !== "object" || value === null) return null;
+      const record = value as Record<string, unknown>;
+      return {
+        title: typeof record.title === "string" && record.title !== "" ? record.title : "Browser tab",
+        url: typeof record.url === "string" ? record.url : "",
+        text: typeof record.text === "string" ? record.text.trim() : "",
+      };
     },
 
     /** Devices paired to the user (user-scoped, not per workspace). */
