@@ -112,6 +112,181 @@ export function parseCliContexts(listed: unknown): CliContext[] {
 
 const isLoopback = (url: URL) => ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
 
+/** Cloud origin bb signs in to; the CLI's built-in `lobu` context points here. */
+export const CLOUD_ORIGIN = "https://app.lobu.ai";
+
+/** Classify a Lobu origin the way the Mac app does: local loopback, Cloud, or another Lobu. */
+export function kindOfOrigin(origin: string): "cloud" | "local" | "other" {
+  try {
+    const url = new URL(origin);
+    if (isLoopback(url)) return "local";
+  } catch {
+    return "other";
+  }
+  return origin === CLOUD_ORIGIN ? "cloud" : "other";
+}
+
+/**
+ * Picks the Cloud context to use, reusing what exists instead of duplicating
+ * it: the preferred login when signed in, else any signed-in Cloud login,
+ * else the preferred login when it exists, else any Cloud login.
+ */
+export function pickCloudContext(contexts: CliContext[], preferredName = "lobu"): CliContext | null {
+  const cloud = contexts.filter((c) => kindOfOrigin(c.origin) === "cloud");
+  return (
+    cloud.find((c) => c.name === preferredName && c.loggedIn) ??
+    cloud.find((c) => c.loggedIn) ??
+    cloud.find((c) => c.name === preferredName) ??
+    cloud[0] ??
+    null
+  );
+}
+
+/** Prefers a signed-in login for an origin, so adding reuses instead of duplicating. */
+export function pickOriginContext(contexts: CliContext[], origin: string): CliContext | null {
+  const matches = contexts.filter((c) => c.origin === origin);
+  return matches.find((c) => c.loggedIn) ?? matches[0] ?? null;
+}
+
+/** A Lobu inbox notification, as `GET /api/:slug/notifications` reports it. */
+export interface NotificationItem {
+  id: number;
+  type: string;
+  title: string;
+  body: string | null;
+  resourceUrl: string | null;
+  isRead: boolean;
+  createdAt: string;
+}
+
+const notificationItemSchema = z.object({
+  id: z.number(),
+  type: z.string().optional(),
+  title: z.string().optional(),
+  body: z.string().nullable().optional(),
+  resource_url: z.string().nullable().optional(),
+  is_read: z.boolean().optional(),
+  created_at: z.string().optional(),
+});
+
+function parseNotificationItem(row: unknown): NotificationItem | null {
+  const parsed = notificationItemSchema.safeParse(row);
+  if (!parsed.success || typeof parsed.data.id !== "number") return null;
+  const item = parsed.data;
+  return {
+    id: item.id,
+    type: item.type ?? "notification",
+    title: item.title ?? `Notification ${item.id}`,
+    body: item.body ?? null,
+    resourceUrl: item.resource_url ?? null,
+    isRead: item.is_read ?? false,
+    createdAt: item.created_at ?? "",
+  };
+}
+/** A feed as `manage_feeds` `list_feeds` reports it (subset). */
+export interface FeedItem {
+  id: number;
+  displayName: string;
+  status: string;
+  connectorKey: string | null;
+  /** Human connector name ("Google Chat"), when Lobu knows one. */
+  connectorName: string | null;
+  /** The feed's own key ("gchat:spaces/3eodnKAAAAE"); displayName often just repeats it. */
+  feedKey: string | null;
+  connectionId: number | null;
+  lastError: string | null;
+  itemsCollected: number | null;
+  updatedAt: string | null;
+}
+
+/** An automation as `client.automations.list()` reports it (subset). */
+export interface AutomationItem {
+  id: string;
+  name: string;
+  status: string;
+  triggers: { kind: string }[] | null;
+  updatedAt: string | null;
+}
+
+/** A paired device as `GET /api/me/devices` reports it (subset). */
+export interface DeviceItem {
+  id: string;
+  workerId: string;
+  label: string | null;
+  platform: string | null;
+  online: boolean;
+  lastSeenAt: string | null;
+  capabilities: string[];
+}
+
+/** A connection as `manage_connections` `list` reports it (subset). */
+export interface ConnectionItem {
+  id: number;
+  displayName: string;
+  connectorKey: string | null;
+  /** Human connector name ("Google Chat"), when Lobu knows one. */
+  connectorName: string | null;
+  /** The account this connection is signed in as, when it has one. */
+  account: string | null;
+  /** The paired device behind a browser or shell connection. */
+  deviceLabel: string | null;
+  status: string;
+  errorMessage: string | null;
+}
+
+const feedItemSchema = z.object({
+  id: z.number(),
+  display_name: z.string().optional(),
+  status: z.string().optional(),
+  connector_key: z.string().nullable().optional(),
+  connector_name: z.string().nullable().optional(),
+  feed_key: z.string().nullable().optional(),
+  connection_id: z.number().nullable().optional(),
+  last_error: z.string().nullable().optional(),
+  items_collected: z.number().nullable().optional(),
+  updated_at: z.string().nullable().optional(),
+});
+
+function parseFeedItem(row: unknown): FeedItem | null {
+  const parsed = feedItemSchema.safeParse(row);
+  if (!parsed.success) return null;
+  const f = parsed.data;
+  return {
+    id: f.id,
+    displayName: f.display_name ?? `Feed ${f.id}`,
+    status: f.status ?? "unknown",
+    connectorKey: f.connector_key ?? null,
+    connectorName: f.connector_name ?? null,
+    feedKey: f.feed_key ?? null,
+    connectionId: f.connection_id ?? null,
+    lastError: f.last_error ?? null,
+    itemsCollected: f.items_collected ?? null,
+    updatedAt: f.updated_at ?? null,
+  };
+}
+/** A browser tab as the chrome bridge `list_tabs` operation reports it (subset). */
+export interface TabItem {
+  tabId: number;
+  title: string;
+  url: string;
+  windowId: number | null;
+  active: boolean;
+}
+
+function parseTabItem(row: unknown): TabItem | null {
+  if (typeof row !== "object" || row === null) return null;
+  const record = row as Record<string, unknown>;
+  if (typeof record.tab_id !== "number") return null;
+  const url = typeof record.url === "string" ? record.url : "";
+  return {
+    tabId: record.tab_id,
+    title: typeof record.title === "string" && record.title !== "" ? record.title : url || `Tab ${record.tab_id}`,
+    url,
+    windowId: typeof record.window_id === "number" ? record.window_id : null,
+    active: record.active === true,
+  };
+}
+
 /** Lobu origins the plugin talks to: HTTPS, or HTTP on this machine. */
 export function lobuOrigin(url: string): string | null {
   try {
@@ -150,11 +325,11 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
     return parsed;
   }
 
-  async function request(context: string | null, path: string, body?: unknown): Promise<unknown> {
+  async function request(context: string | null, path: string, body?: unknown, method?: string): Promise<unknown> {
     // A 401 means the cached token expired; mint a fresh one once.
     for (const fresh of [false, true]) {
       const response = await fetch(`${baseUrl}${path}`, {
-        method: body === undefined ? "GET" : "POST",
+        method: method ?? (body === undefined ? "GET" : "POST"),
         headers: {
           Authorization: `Bearer ${(await session(context, fresh)).token}`,
           "Content-Type": "application/json",
@@ -288,6 +463,150 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
       })) as { success?: boolean; return_value?: { deleted_ids?: number[]; already_superseded_ids?: number[] }; error?: { message?: string } };
       if (result.success !== true) throw new Error(result.error?.message ?? "run_sdk failed");
       return [...(result.return_value?.deleted_ids ?? []), ...(result.return_value?.already_superseded_ids ?? [])];
+    },
+
+    /** Newest inbox notifications in one workspace, newest first. */
+    async listNotifications(
+      context: string | null,
+      workspace: string,
+      limit: number,
+      cursor: number | null,
+    ): Promise<{ notifications: NotificationItem[]; nextCursor: number | null }> {
+      const params = new URLSearchParams({ limit: String(limit) });
+      if (cursor !== null) params.set("cursor", String(cursor));
+      const listed = (await request(context, `/api/${encodeURIComponent(workspace)}/notifications?${params}`)) as {
+        notifications?: unknown[];
+        nextCursor?: number | null;
+      };
+      return {
+        notifications: (Array.isArray(listed.notifications) ? listed.notifications : [])
+          .map((row) => parseNotificationItem(row))
+          .filter((item): item is NotificationItem => item !== null),
+        nextCursor: typeof listed.nextCursor === "number" ? listed.nextCursor : null,
+      };
+    },
+
+    /** How many inbox notifications are unread in one workspace. */
+    async unreadNotificationCount(context: string | null, workspace: string): Promise<number> {
+      const result = (await request(context, `/api/${encodeURIComponent(workspace)}/notifications/unread-count`)) as {
+        count?: number;
+      };
+      return typeof result.count === "number" ? result.count : 0;
+    },
+
+    /** Marks one inbox notification read. A 2xx from Lobu is the success signal. */
+    async markNotificationRead(context: string | null, workspace: string, id: number): Promise<void> {
+      await request(context, `/api/${encodeURIComponent(workspace)}/notifications/${id}/read`, undefined, "PATCH");
+    },
+
+    /** Feeds in one workspace, newest first. */
+    async listFeeds(context: string | null, workspace: string, limit: number): Promise<FeedItem[]> {
+      const listed = (await request(context, `/api/${encodeURIComponent(workspace)}/manage_feeds`, {
+        action: "list_feeds",
+        limit,
+      })) as { feeds?: unknown[] };
+      return (Array.isArray(listed.feeds) ? listed.feeds : [])
+        .map((row) => parseFeedItem(row))
+        .filter((item): item is FeedItem => item !== null);
+    },
+
+    /** Automations in one workspace, via the direct manage_automations tool. */
+    async listAutomations(context: string | null, workspace: string, limit: number): Promise<AutomationItem[]> {
+      const listed = (await request(context, `/api/${encodeURIComponent(workspace)}/manage_automations`, {
+        action: "list",
+        limit,
+      })) as { automations?: unknown[] };
+      const rows = listed.automations;
+      if (!Array.isArray(rows)) return [];
+      return rows.flatMap((row) => {
+        if (typeof row !== "object" || row === null) return [];
+        const record = row as Record<string, unknown>;
+        const id = record.automation_id;
+        if (typeof id !== "string" && typeof id !== "number") return [];
+        const triggers = Array.isArray(record.triggers)
+          ? record.triggers.flatMap((t) =>
+              typeof t === "object" && t !== null && typeof (t as Record<string, unknown>).kind === "string"
+                ? [{ kind: (t as Record<string, unknown>).kind as string }]
+                : [],
+            )
+          : null;
+        return [
+          {
+            id: String(id),
+            name: typeof record.name === "string" ? record.name : `Automation ${String(id)}`,
+            status: typeof record.status === "string" ? record.status : "unknown",
+            triggers,
+            updatedAt: typeof record.updated_at === "string" ? record.updated_at : null,
+          },
+        ];
+      });
+    },
+
+    /** Connections in one workspace. */
+    async listConnections(context: string | null, workspace: string): Promise<ConnectionItem[]> {
+      const listed = (await request(context, `/api/${encodeURIComponent(workspace)}/manage_connections`, {
+        action: "list",
+      })) as { connections?: unknown[] };
+      return (Array.isArray(listed.connections) ? listed.connections : []).flatMap((row) => {
+        if (typeof row !== "object" || row === null) return [];
+        const record = row as Record<string, unknown>;
+        if (typeof record.id !== "number") return [];
+        return [
+          {
+            id: record.id,
+            displayName: typeof record.display_name === "string" ? record.display_name : `Connection ${record.id}`,
+            connectorKey: typeof record.connector_key === "string" ? record.connector_key : null,
+            connectorName: typeof record.connector_name === "string" ? record.connector_name : null,
+            account: typeof record.auth_profile_name === "string" ? record.auth_profile_name : null,
+            deviceLabel: typeof record.device_label === "string" ? record.device_label : null,
+            status: typeof record.status === "string" ? record.status : "unknown",
+            errorMessage: typeof record.error_message === "string" ? record.error_message : null,
+          },
+        ];
+      });
+    },
+
+    /** Open tabs on one chrome-bridge connection. Volatile by nature: always fetched live, never cached. */
+    async listTabs(context: string | null, workspace: string, connectionId: number): Promise<TabItem[]> {
+      const result = (await request(context, `/api/${encodeURIComponent(workspace)}/manage_operations`, {
+        action: "execute",
+        connection_id: connectionId,
+        operation_key: "list_tabs",
+        input: {},
+      })) as { tabs?: unknown[]; output?: { tabs?: unknown[] } };
+      const rows = Array.isArray(result)
+        ? result
+        : Array.isArray(result.tabs)
+          ? result.tabs
+          : Array.isArray(result.output?.tabs)
+            ? result.output.tabs
+            : [];
+      return rows
+        .map((row) => parseTabItem(row))
+        .filter((item): item is TabItem => item !== null);
+    },
+
+    /** Devices paired to the user (user-scoped, not per workspace). */
+    async listDevices(context: string | null): Promise<DeviceItem[]> {
+      const listed = (await request(context, "/api/me/devices")) as { devices?: unknown[] };
+      return (Array.isArray(listed.devices) ? listed.devices : []).flatMap((row) => {
+        if (typeof row !== "object" || row === null) return [];
+        const record = row as Record<string, unknown>;
+        if (typeof record.id !== "string") return [];
+        return [
+          {
+            id: record.id,
+            workerId: typeof record.worker_id === "string" ? record.worker_id : record.id,
+            label: typeof record.label === "string" ? record.label : null,
+            platform: typeof record.platform === "string" ? record.platform : null,
+            online: record.online === true,
+            lastSeenAt: typeof record.last_seen_at === "string" ? record.last_seen_at : null,
+            capabilities: Array.isArray(record.capabilities)
+              ? record.capabilities.filter((c): c is string => typeof c === "string")
+              : [],
+          },
+        ];
+      });
     },
   };
 }

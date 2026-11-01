@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { lobuOrigin, parseCliContexts } from "../lib/lobu-api";
+import { kindOfOrigin, lobuOrigin, parseCliContexts, pickCloudContext, pickOriginContext, type CliContext } from "../lib/lobu-api";
 
 const listed = {
   current: "side",
@@ -31,5 +31,46 @@ describe("CLI contexts", () => {
     expect(lobuOrigin("http://lobu.example.com")).toBeNull();
     expect(lobuOrigin("javascript:alert(1)")).toBeNull();
     expect(lobuOrigin("not a url")).toBeNull();
+  });
+
+  test("classifies origins like the Mac app", () => {
+    expect(kindOfOrigin("https://app.lobu.ai")).toBe("cloud");
+    expect(kindOfOrigin("http://localhost:8787")).toBe("local");
+    expect(kindOfOrigin("http://127.0.0.1:8118")).toBe("local");
+    expect(kindOfOrigin("https://lobu.example.com")).toBe("other");
+    expect(kindOfOrigin("not a url")).toBe("other");
+  });
+
+  test("Use Lobu Cloud reuses a signed-in Cloud login instead of duplicating it", () => {
+    const contexts: CliContext[] = [
+      { name: "lobu", origin: "https://app.lobu.ai", current: false, loggedIn: false },
+      { name: "market-wiring", origin: "https://app.lobu.ai", current: false, loggedIn: true },
+      { name: "local", origin: "http://localhost:8787", current: true, loggedIn: true },
+    ];
+    expect(pickCloudContext(contexts, "lobu")?.name).toBe("market-wiring");
+
+    const preferredSignedIn: CliContext[] = [
+      { name: "lobu", origin: "https://app.lobu.ai", current: false, loggedIn: true },
+      { name: "market-wiring", origin: "https://app.lobu.ai", current: true, loggedIn: true },
+    ];
+    expect(pickCloudContext(preferredSignedIn, "lobu")?.name).toBe("lobu");
+
+    const loggedOut: CliContext[] = [
+      { name: "lobu", origin: "https://app.lobu.ai", current: false, loggedIn: false },
+      { name: "other-cloud", origin: "https://app.lobu.ai", current: true, loggedIn: false },
+    ];
+    expect(pickCloudContext(loggedOut, "lobu")?.name).toBe("lobu");
+    expect(pickCloudContext([], "lobu")).toBeNull();
+  });
+
+  test("Another Lobu reuses the login for its origin instead of duplicating it", () => {
+    const contexts: CliContext[] = [
+      { name: "market-wiring", origin: "https://app.lobu.ai", current: false, loggedIn: true },
+      { name: "stale-cloud", origin: "https://app.lobu.ai", current: false, loggedIn: false },
+      { name: "local", origin: "http://localhost:8787", current: true, loggedIn: true },
+    ];
+    expect(pickOriginContext(contexts, "https://app.lobu.ai")?.name).toBe("market-wiring");
+    expect(pickOriginContext(contexts, "http://localhost:8787")?.name).toBe("local");
+    expect(pickOriginContext(contexts, "https://lobu.example.com")).toBeNull();
   });
 });

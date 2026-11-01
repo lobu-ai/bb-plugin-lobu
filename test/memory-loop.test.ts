@@ -19,9 +19,26 @@ interface StoredMemory {
   supersededBy: number | null;
 }
 
+interface StoredNotification {
+  id: number;
+  workspace: string;
+  type: string;
+  title: string;
+  body: string | null;
+  resource_url: string | null;
+  is_read: boolean;
+  created_at: string;
+}
+
 const lobu = {
   memories: [] as StoredMemory[],
   searches: [] as { workspace: string; query: string }[],
+  notifications: [] as StoredNotification[],
+  feeds: [] as Record<string, unknown>[],
+  automations: [] as Record<string, unknown>[],
+  connections: [] as Record<string, unknown>[],
+  devices: [] as Record<string, unknown>[],
+  tabs: [] as Record<string, unknown>[],
   nextId: 1000,
 };
 
@@ -47,8 +64,41 @@ beforeAll(() => {
   server = Bun.serve({
     port: 0,
     async fetch(request) {
-      if (request.headers.get("authorization") !== `Bearer ${TOKEN}`) return new Response("no", { status: 401 });
       const url = new URL(request.url);
+      if (url.pathname === "/health") return new Response("ok", { status: 200 });
+      if (request.headers.get("authorization") !== `Bearer ${TOKEN}`) return new Response("no", { status: 401 });
+      const unreadMatch = url.pathname.match(/^\/api\/([^/]+)\/notifications\/unread-count$/);
+      if (unreadMatch !== null) {
+        const workspace = unreadMatch[1] as string;
+        return Response.json({
+          count: lobu.notifications.filter((n) => n.workspace === workspace && !n.is_read).length,
+        });
+      }
+      const listMatch = url.pathname.match(/^\/api\/([^/]+)\/notifications$/);
+      if (listMatch !== null && request.method === "GET") {
+        const workspace = listMatch[1] as string;
+        const limit = Math.max(Number(url.searchParams.get("limit")) || 20, 1);
+        const cursorParam = url.searchParams.get("cursor");
+        const cursor = cursorParam === null ? null : Number(cursorParam);
+        const ordered = lobu.notifications
+          .filter((n) => n.workspace === workspace && (cursor === null || n.id < cursor))
+          .sort((a, b) => b.id - a.id);
+        const page = ordered.slice(0, limit);
+        return Response.json({
+          notifications: page,
+          nextCursor: ordered.length > page.length ? page[page.length - 1]!.id : null,
+        });
+      }
+      const readMatch = url.pathname.match(/^\/api\/([^/]+)\/notifications\/(\d+)\/read$/);
+      if (readMatch !== null && request.method === "PATCH") {
+        const target = lobu.notifications.find((n) => n.workspace === readMatch![1] && n.id === Number(readMatch![2]));
+        if (target === undefined) return new Response("not found", { status: 404 });
+        target.is_read = true;
+        return Response.json({ ok: true });
+      }
+      if (url.pathname === "/api/me/devices" && request.method === "GET") {
+        return Response.json({ devices: lobu.devices });
+      }
       const match = url.pathname.match(/^\/api\/([^/]+)\/([a-z_]+)$/);
       if (match === null) return new Response("not found", { status: 404 });
       const [, workspace, tool] = match as unknown as [string, string, string];
@@ -163,6 +213,37 @@ beforeAll(() => {
           }));
         return Response.json({ content });
       }
+      if (tool === "manage_feeds" && body.action === "list_feeds") {
+        const limit = typeof body.limit === "number" ? body.limit : 50;
+        return Response.json({
+          action: "list_feeds",
+          feeds: lobu.feeds
+            .filter((f) => f.workspace === workspace)
+            .slice(-limit)
+            .reverse(),
+        });
+      }
+      if (tool === "manage_connections" && body.action === "list") {
+        return Response.json({
+          action: "list",
+          connections: lobu.connections.filter((c) => c.organization_id === workspace || c.workspace === workspace),
+        });
+      }
+      if (tool === "manage_operations" && body.action === "execute" && body.operation_key === "list_tabs") {
+        return Response.json({
+          action: "execute",
+          status: "completed",
+          output: {
+            tabs: lobu.tabs.filter((t) => t.workspace === workspace && t.connection_id === body.connection_id),
+          },
+        });
+      }
+      if (tool === "manage_automations" && body.action === "list") {
+        return Response.json({
+          action: "list",
+          automations: lobu.automations.filter((a) => a.workspace === workspace),
+        });
+      }
       if (tool === "run_sdk") {
         const ids = JSON.parse(String(body.script).match(/delete\((\{.*\})\)/)?.[1] ?? "{}").content_ids as number[];
         for (const m of lobu.memories) if (ids.includes(m.id) && m.workspace === workspace) m.deleted = true;
@@ -226,6 +307,7 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
   let rpc: Record<string, (input: unknown) => unknown> = {};
   let cli: PluginCliRegistration | null = null;
   const formRequests: unknown[] = [];
+  const mentionProviders: { id: string; search: (ctx: unknown) => Promise<unknown[]>; resolve: (id: string) => Promise<unknown> }[] = [];
   const values = { autoSave: true, recapOnArchive: false, ...overrides };
   const bb = {
     pluginId: "lobu",
@@ -272,6 +354,7 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
         formRequests.push(request);
         return { outcome: "cancelled", reason: "user" };
       },
+      registerMentionProvider: (provider: (typeof mentionProviders)[number]) => void mentionProviders.push(provider),
     },
     log: { info: () => undefined, warn: () => undefined },
     onDispose: () => undefined,
@@ -283,7 +366,21 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
     tools.get(name)!.execute(params, { threadId, projectId: "proj-1", signal: new AbortController().signal });
   const runCli = (argv: string[], threadId = "thread-1") =>
     cli!.run(argv, { threadId, projectId: "proj-1", signal: new AbortController().signal });
-  return { kv, rpc, call, runCli, formRequests, brief: (threadId: string) => instructions!({ threadId, projectId: "proj-1" }) };
+  return { kv, rpc, call, runCli, formRequests, mentions: mentionProviders, brief: (threadId: string) => instructions!({ threadId, projectId: "proj-1" }) };
+}
+
+/**
+ * A real @-menu keystroke never waits on a cold list fetch: it answers from the
+ * cache and lets the fill finish in the background (a timeout would blow the
+ * host's ~2s per-search box). Tests therefore warm the way the panel does on
+ * mount, then assert on warmed searches.
+ */
+async function warmMentions(search: (ctx: unknown) => Promise<unknown[]>): Promise<void> {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if ((await search({ query: "", projectId: null })).length > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("mention lists never warmed");
 }
 
 const deployGotcha = {
@@ -550,5 +647,206 @@ describe("the memory loop", () => {
     expect(toolReplaced).toContain("Staging uses port 9092");
     expect(brief("thread-acp-5")).toContain("Staging uses port 9092");
     expect(brief("thread-acp-5")).not.toContain("Staging uses port 9091");
+  });
+
+  test("inbox lists personal notifications and marks them read", async () => {
+    lobu.notifications.push(
+      {
+        id: 9001,
+        workspace: "me",
+        type: "agent_message",
+        title: "Approval needed",
+        body: "Please approve the run.",
+        resource_url: "/me/runs/1",
+        is_read: false,
+        created_at: "2026-10-01T00:00:00.000Z",
+      },
+      {
+        id: 9002,
+        workspace: "me",
+        type: "note",
+        title: "Old news",
+        body: null,
+        resource_url: null,
+        is_read: true,
+        created_at: "2026-09-01T00:00:00.000Z",
+      },
+    );
+    const { rpc } = await startPlugin();
+    const inbox = (await rpc.inbox!({ cursor: null })) as {
+      workspace: string;
+      unreadCount: number;
+      notifications: { id: number; title: string; resourceUrl: string | null; isRead: boolean }[];
+      nextCursor: number | null;
+      url: string;
+    };
+    expect(inbox.workspace).toBe("me");
+    expect(inbox.unreadCount).toBe(1);
+    expect(inbox.notifications.map((n) => n.id)).toEqual([9002, 9001]);
+    expect(inbox.notifications.find((n) => n.id === 9001)).toMatchObject({ title: "Approval needed", isRead: false });
+    expect(inbox.notifications.find((n) => n.id === 9001)?.resourceUrl).toBe(`http://localhost:${server.port}/me/runs/1`);
+    expect(inbox.nextCursor).toBeNull();
+    expect(inbox.url).toBe(`http://localhost:${server.port}/me`);
+    await rpc.markNotificationRead!({ notificationId: 9001, workspace: "me" });
+    const after = (await rpc.inbox!({ cursor: null })) as { unreadCount: number; notifications: { id: number; isRead: boolean }[] };
+    expect(after.unreadCount).toBe(0);
+    expect(after.notifications.find((n) => n.id === 9001)?.isRead).toBe(true);
+  });
+
+  test("@-mention providers search and resolve memory, feeds, automations, connections, and devices", async () => {
+    lobu.memories.push({
+      id: 7001,
+      workspace: "me",
+      title: "Deploy checklist",
+      content: "Run migrations before deploying.",
+      kind: "fact",
+      deleted: false,
+      supersededBy: null,
+    });
+    lobu.feeds.push(
+      { workspace: "me", id: 81, display_name: "Gmail inbox", feed_key: "inbox", connector_name: "Gmail", status: "active", connector_key: "gmail", connection_id: 7, last_error: null, items_collected: 12, updated_at: "2026-10-01T00:00:00.000Z" },
+      { workspace: "me", id: 82, display_name: "slack:general", feed_key: "gchat:spaces/CAAAA", connector_name: "Google Chat", status: "failing", connector_key: "slack", connection_id: 8, last_error: "auth expired", updated_at: "2026-10-02T00:00:00.000Z", items_collected: 3 },
+    );
+    lobu.automations.push({
+      workspace: "me",
+      automation_id: "a-1",
+      name: "Morning digest",
+      status: "active",
+      triggers: [{ kind: "schedule" }],
+      updated_at: "2026-10-03T00:00:00.000Z",
+    });
+    lobu.connections.push(
+      {
+        workspace: "me",
+        organization_id: "me",
+        id: 7,
+        display_name: "Gmail (me@ex.com)",
+        connector_key: "gmail",
+        connector_name: "Gmail",
+        auth_profile_name: "me@ex.com",
+        status: "active",
+        error_message: null,
+      },
+      // Lobu names a Google Chat space by its key, which reads as an id.
+      {
+        workspace: "me",
+        organization_id: "me",
+        id: 8,
+        display_name: "spaces/CAAAA",
+        connector_key: "gchat",
+        connector_name: "Google Chat",
+        auth_profile_name: null,
+        device_label: null,
+        status: "active",
+        error_message: null,
+      },
+    );
+    lobu.devices.push({
+      id: "dev-1",
+      worker_id: "macbook",
+      label: "MacBook",
+      platform: "darwin",
+      online: true,
+      last_seen_at: "2026-10-04T00:00:00.000Z",
+      capabilities: ["os.shell"],
+    });
+
+    const { rpc, mentions } = await startPlugin();
+    // Await a full sync so the seeded memory is hydrated into memory.saved.
+    await rpc.projectMemory!({ projectId: "proj-1" });
+    const byId = (id: string) => mentions.find((p) => p.id === id)!;
+    expect(mentions.map((p) => p.id).sort()).toEqual(["lobu-automation", "lobu-connection", "lobu-feed", "lobu-memory", "lobu-tab"]);
+    await warmMentions(byId("lobu-feed").search as (ctx: unknown) => Promise<unknown[]>);
+
+    // Memory: blank query lists recent saves, a query searches, resolve returns full text.
+    const memSearch = byId("lobu-memory").search as (ctx: unknown) => Promise<{ id: string; title: string }[]>;
+    const memResolve = byId("lobu-memory").resolve as (id: string) => Promise<{ context: string }>;
+    const recent = await memSearch({ query: "", projectId: "proj-1" });
+    expect(recent.some((item) => item.id === "mem:me:7001")).toBe(true);
+    const hits = await memSearch({ query: "migrations deploying", projectId: "proj-1" });
+    expect(hits.map((item) => item.id)).toContain("mem:me:7001");
+    const memCtx = await memResolve("mem:me:7001");
+    expect(memCtx.context).toContain("Deploy checklist");
+    expect(memCtx.context).toContain("Run migrations before deploying.");
+    // Unknown ids resolve gracefully instead of throwing (a throw would block the send).
+    expect((await memResolve("mem:me:999999")).context).toContain("no longer available");
+
+    // Feeds: filter by name, resolve to a fresh status summary.
+    const feedSearch = byId("lobu-feed").search as (ctx: unknown) => Promise<{ id: string; title: string; subtitle?: string }[]>;
+    const feedResolve = byId("lobu-feed").resolve as (id: string) => Promise<{ context: string }>;
+    expect((await feedSearch({ query: "", projectId: null })).map((item) => item.id).sort()).toEqual(["feed:me:81", "feed:me:82"]);
+    expect((await feedSearch({ query: "gmail", projectId: null })).map((item) => item.id)).toEqual(["feed:me:81"]);
+    // A key-shaped name leads with the connector's human name; the key stays visible.
+    const rawFeed = (await feedSearch({ query: "google chat", projectId: null })).find((item) => item.id === "feed:me:82");
+    expect(rawFeed?.title).toBe("Google Chat");
+    expect(rawFeed?.subtitle).toContain("slack:general");
+    // Two workspaces are reachable here, so the org name is part of the label;
+    // "Gmail" is dropped because the title already says it.
+    expect((await feedSearch({ query: "gmail", projectId: null }))[0]?.subtitle).toBe("Me · active");
+    const feedCtx = (await feedResolve("feed:me:82")).context;
+    expect(feedCtx).toContain("slack:general");
+    expect(feedCtx).toContain("auth expired");
+
+    // Automations: list and resolve to name, status, and trigger kinds.
+    const autoSearch = byId("lobu-automation").search as (ctx: unknown) => Promise<{ id: string; title: string }[]>;
+    const autoResolve = byId("lobu-automation").resolve as (id: string) => Promise<{ context: string }>;
+    expect((await autoSearch({ query: "", projectId: null })).map((item) => item.id)).toEqual(["auto:me:a-1"]);
+    const autoCtx = (await autoResolve("auto:me:a-1")).context;
+    expect(autoCtx).toContain("Morning digest");
+    expect(autoCtx).toContain("schedule");
+
+    // Connections and devices: paired device plus connection, each resolvable.
+    const connSearch = byId("lobu-connection").search as (ctx: unknown) => Promise<{ id: string; title: string; subtitle?: string }[]>;
+    const connResolve = byId("lobu-connection").resolve as (id: string) => Promise<{ context: string }>;
+    expect((await connSearch({ query: "", projectId: null })).map((item) => item.id).sort()).toEqual([
+      "conn:me:7",
+      "conn:me:8",
+      "dev:dev-1",
+    ]);
+    expect((await connSearch({ query: "macbook", projectId: null })).map((item) => item.id)).toEqual(["dev:dev-1"]);
+    // Connections show the connector's human name and the account, never the key.
+    const gmailRow = (await connSearch({ query: "gmail", projectId: null }))[0];
+    expect(gmailRow?.title).toBe("Gmail (me@ex.com)");
+    expect(gmailRow?.subtitle).toBe("Me · active");
+    const chatRow = (await connSearch({ query: "google chat", projectId: null }))[0];
+    expect(chatRow?.title).toBe("Google Chat");
+    expect(chatRow?.subtitle).toContain("spaces/CAAAA");
+    const devCtx = (await connResolve("dev:dev-1")).context;
+    expect(devCtx).toContain("MacBook");
+    expect(devCtx).toContain("online");
+    const connCtx = (await connResolve("conn:me:7")).context;
+    expect(connCtx).toContain("Gmail (me@ex.com)");
+    expect(connCtx).toContain("active");
+    expect((await connResolve("conn:me:999")).context).toContain("no longer available");
+  });
+
+  test("@-mention browser tabs list open tabs and resolve the picked one", async () => {
+    lobu.connections.push({
+      workspace: "me",
+      organization_id: "me",
+      id: 479,
+      display_name: "Chrome \u2014 MacBook",
+      connector_key: "chrome",
+      status: "active",
+      error_message: null,
+    });
+    lobu.tabs.push(
+      { workspace: "me", connection_id: 479, tab_id: 101, title: "Inbox", url: "https://mail.google.com/mail/u/0/#inbox", window_id: 1, active: false },
+      { workspace: "me", connection_id: 479, tab_id: 102, title: "Lobu \u2014 Memory", url: "https://app.lobu.ai/buremba", window_id: 1, active: true },
+    );
+
+    const { mentions } = await startPlugin();
+    const byId = (id: string) => mentions.find((p) => p.id === id)!;
+    expect(mentions.map((p) => p.id).sort()).toEqual(["lobu-automation", "lobu-connection", "lobu-feed", "lobu-memory", "lobu-tab"]);
+
+    const tabSearch = byId("lobu-tab").search as (ctx: unknown) => Promise<{ id: string; title: string }[]>;
+    const tabResolve = byId("lobu-tab").resolve as (id: string) => Promise<{ context: string }>;
+    await warmMentions(tabSearch as (ctx: unknown) => Promise<unknown[]>);
+    expect((await tabSearch({ query: "", projectId: null })).map((item) => item.id)).toEqual(["tab:me:479:101", "tab:me:479:102"]);
+    expect((await tabSearch({ query: "mail", projectId: null })).map((item) => item.id)).toEqual(["tab:me:479:101"]);
+    const tabCtx = (await tabResolve("tab:me:479:102")).context;
+    expect(tabCtx).toContain("Lobu \u2014 Memory");
+    expect(tabCtx).toContain("https://app.lobu.ai/buremba");
+    expect((await tabResolve("tab:me:479:999")).context).toContain("no longer open");
   });
 });

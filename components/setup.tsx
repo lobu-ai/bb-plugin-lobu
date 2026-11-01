@@ -2,7 +2,7 @@
 // to Lobu Cloud or run Lobu on this machine, and pick the login bb saves through. The New thread screen shows it as a card until bb is
 // connected; the plugin's settings page always shows it.
 import { useCallback, useEffect, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { experimental_copyToClipboard, UrlLink, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract, SetupStatus } from "@/lib/contract";
 import { Button } from "@/components/ui/button";
@@ -11,9 +11,6 @@ import { cn } from "@/lib/utils";
 
 /** How often the page checks whether a browser approval has landed. */
 const SIGN_IN_POLL_MS = 3_000;
-
-const field =
-  "h-8 rounded-md border border-input bg-transparent px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 const host = (origin: string) => origin.replace(/^https?:\/\//, "");
 
@@ -194,50 +191,24 @@ function useConnect(reload: () => Promise<SetupStatus | null>) {
         const { approvalUrl } = await rpc.call("useCloud", {});
         if (!(await connectedNow())) signIn.wait(approvalUrl);
       }),
+    useExisting: (name: string) =>
+      act(async () => {
+        const { approvalUrl } = await rpc.call("useLogin", { name });
+        if (await connectedNow()) return;
+        const picked = (await reload())?.contexts.find((c) => c.name === name);
+        if (picked?.kind === "local" && approvalUrl === null) start.wait(null);
+        else signIn.wait(approvalUrl);
+      }),
     useLocal: () =>
       act(async () => {
         const { error: failure } = await rpc.call("useLocal", {});
         if (failure !== null) setError(failure);
         else if (!(await connectedNow())) start.wait(null);
       }),
-    useOther: (name: string, url: string) =>
-      act(async () => {
-        const { approvalUrl } = await rpc.call("addLogin", { name, url });
-        if (!(await connectedNow())) signIn.wait(approvalUrl);
-      }),
   };
 }
 
 type Connect = ReturnType<typeof useConnect>;
-
-function OtherLobu({ connect }: { connect: Connect }) {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [url, setUrl] = useState("");
-  if (!open) {
-    return (
-      <Button variant="ghost" size="sm" disabled={connect.busy} onClick={() => setOpen(true)}>
-        Another Lobu…
-      </Button>
-    );
-  }
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    connect.useOther(name.trim(), url);
-  };
-  return (
-    <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
-      <input aria-label="Login name" placeholder="Name, e.g. work" required value={name} onChange={(e) => setName(e.target.value)} className={cn(field, "w-40")} />
-      <input aria-label="Lobu URL" type="url" placeholder="https://lobu.example.com" required value={url} onChange={(e) => setUrl(e.target.value)} className={cn(field, "w-56")} />
-      <Button type="submit" size="sm" variant="outline" disabled={connect.busy}>
-        Sign in
-      </Button>
-      <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)}>
-        Cancel
-      </Button>
-    </form>
-  );
-}
 
 function ConnectError({ connect, problem }: { connect: Connect; problem: string | null }) {
   const shown = connect.error ?? problem;
@@ -248,31 +219,150 @@ function ConnectError({ connect, problem }: { connect: Connect; problem: string 
   );
 }
 
-/** Not connected yet: Lobu Cloud, Lobu on this machine, or another Lobu. */
+/**
+ * What is wrong with the selected login, in one compact line naming it — the
+ * Mac app's status line under the header. Local says whether to open the Lobu
+ * app or expand the list; anything else points at the list to reconnect.
+ */
+function StatusBlock({ status }: { status: SetupStatus }) {
+  const login = status.login;
+  if (login === null || login.problem === null) return null;
+  // Fresh CLI, no contexts yet: the creator buttons below explain themselves.
+  if (login.context === null && status.contexts.length === 0) return null;
+  const name = login.context ?? "the selected login";
+  if (login.kind === "local") {
+    return (
+      <p role="alert" className="text-sm">
+        <span className="text-destructive">
+          ‘{name}’ isn’t running ({host(login.origin)}).
+        </span>{" "}
+        <span className="text-muted-foreground">
+          {login.localBelongsToMacApp ? "Open the Lobu app to start it, or switch below." : "Expand CONTEXT below to start it, or switch."}
+        </span>
+      </p>
+    );
+  }
+  return (
+    <p role="alert" className="text-sm">
+      <span className="text-destructive">‘{name}’ isn’t connected.</span>{" "}
+      <span className="text-muted-foreground">Expand CONTEXT below to sign in again.</span>
+    </p>
+  );
+}
+
+const KIND_LABEL = { cloud: "Lobu Cloud", local: "Lobu on this machine" } as const;
+
+/**
+ * The CLI's contexts as a Mac-style CONTEXT disclosure: a collapsed section
+ * with one row per context — its name + origin, a checkmark on the login bb
+ * uses, and a "Signed in" badge on the other logins that are ready to switch
+ * to. Clicking a row switches bb to it, signing in or starting it when needed.
+ */
+function ContextAccordion({
+  status,
+  connect,
+  active,
+  defaultOpen,
+}: {
+  status: SetupStatus;
+  connect: Connect;
+  active: string | null;
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  if (status.contexts.length === 0) return null;
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        disabled={connect.busy}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground"
+      >
+        <span className="inline-block w-3 text-center">{open ? "▾" : "▸"}</span>
+        <span>CONTEXT</span>
+        <span className="font-normal">
+          · {active ?? "none"} · {status.contexts.length}
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-0.5">
+          {status.contexts.map((c) => {
+            const isActive = c.name === active;
+            return (
+              <button
+                key={c.name}
+                type="button"
+                disabled={connect.busy}
+                onClick={() => connect.useExisting(c.name)}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                  isActive ? "bg-muted" : "hover:bg-muted/60",
+                )}
+              >
+                <span className="w-4 shrink-0 text-center">{isActive ? "✓" : "○"}</span>
+                <span className="min-w-0 flex-1">
+                  <span className={cn("block truncate", isActive && "font-semibold")}>{c.name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{host(c.origin)}</span>
+                </span>
+                {isActive ? null : c.loggedIn ? (
+                  <span className="shrink-0 text-xs text-muted-foreground">Signed in</span>
+                ) : (
+                  <span className="shrink-0 text-xs text-muted-foreground">Sign in</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Creators for when the list has nothing to pick: a Cloud login and the managed local Lobu. */
+function MissingCreators({ status, connect }: { status: SetupStatus; connect: Connect }) {
+  const hasCloud = status.contexts.some((c) => c.kind === "cloud");
+  const hasLocal = status.contexts.some((c) => c.kind === "local");
+  if (hasCloud && hasLocal) return null;
+  return (
+    <div className="space-y-3">
+      {hasCloud ? null : (
+        <div className="space-y-1">
+          <Button size="sm" disabled={connect.busy} onClick={connect.useCloud}>
+            Use Lobu Cloud
+          </Button>
+          <p className="text-xs text-muted-foreground">Sign in at app.lobu.ai. New to Lobu? You can create an account on the same page.</p>
+        </div>
+      )}
+      {hasLocal ? null : (
+        <div className="space-y-1">
+          <Button size="sm" variant="outline" disabled={connect.busy} onClick={connect.useLocal}>
+            Run Lobu on this machine
+          </Button>
+          <p className="text-xs text-muted-foreground">Your memory stays on this computer, and Lobu runs while bb does.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Not connected yet: pick a context, or create the Cloud / local one when missing. */
 function ChooseStep({ status, reload }: { status: SetupStatus; reload: () => Promise<SetupStatus | null> }) {
   const connect = useConnect(reload);
   if (connect.waiting !== null) return connect.waiting;
   return (
     <div className="space-y-3 text-sm">
-      <ConnectError connect={connect} problem={status.login?.problem ?? null} />
-      <div className="space-y-1">
-        <Button size="sm" disabled={connect.busy} onClick={connect.useCloud}>
-          Use Lobu Cloud
-        </Button>
-        <p className="text-xs text-muted-foreground">Sign in at app.lobu.ai. New to Lobu? You can create an account on the same page.</p>
-      </div>
-      <div className="space-y-1">
-        <Button size="sm" variant="outline" disabled={connect.busy} onClick={connect.useLocal}>
-          Run Lobu on this machine
-        </Button>
-        <p className="text-xs text-muted-foreground">Your memory stays on this computer, and Lobu runs while bb does.</p>
-      </div>
-      <OtherLobu connect={connect} />
+      <StatusBlock status={status} />
+      {connect.error === null ? null : (
+        <p role="alert" className="text-xs text-destructive">
+          {connect.error}
+        </p>
+      )}
+      <ContextAccordion status={status} connect={connect} active={status.login?.context ?? null} defaultOpen={false} />
+      <MissingCreators status={status} connect={connect} />
     </div>
   );
 }
-
-const KIND_LABEL = { cloud: "Lobu Cloud", local: "Lobu on this machine" } as const;
 
 /** How many memories bb saved through this login, linking to them in Lobu. */
 function SavedSummary() {
@@ -309,19 +399,9 @@ function Connected({ status, reload }: { status: SetupStatus; reload: () => Prom
       </p>
       <SavedSummary />
       {connect.waiting ?? (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">Switch to</span>
-          {login.kind === "cloud" ? null : (
-            <Button variant="outline" size="sm" disabled={connect.busy} onClick={connect.useCloud}>
-              Lobu Cloud
-            </Button>
-          )}
-          {login.kind === "local" ? null : (
-            <Button variant="outline" size="sm" disabled={connect.busy} onClick={connect.useLocal}>
-              Lobu on this machine
-            </Button>
-          )}
-          <OtherLobu connect={connect} />
+        <div className="space-y-3">
+          <ContextAccordion status={status} connect={connect} active={login.context} defaultOpen={false} />
+          <MissingCreators status={status} connect={connect} />
         </div>
       )}
       <ConnectError connect={connect} problem={null} />
@@ -335,10 +415,11 @@ function Steps({ status, reload }: { status: SetupStatus; reload: () => Promise<
   return <Connected status={status} reload={reload} />;
 }
 
-function Frame({ title, children }: { title: string; children: ReactNode }) {
+/** Card frame shared by the setup card and the inbox section. Pass `header` for a custom (e.g. collapsible) heading instead of the plain title. */
+export function Frame({ title, children, header }: { title?: string; children: ReactNode; header?: ReactNode }) {
   return (
     <section className="space-y-2 rounded-lg border border-border px-4 py-3">
-      <h3 className="text-sm font-medium">{title}</h3>
+      {header ?? <h3 className="text-sm font-medium">{title}</h3>}
       {children}
     </section>
   );
@@ -348,9 +429,6 @@ function Frame({ title, children }: { title: string; children: ReactNode }) {
 export function SetupCard({ status, reload }: { status: SetupStatus; reload: () => Promise<SetupStatus | null> }) {
   return (
     <Frame title="Connect Lobu">
-      <p className="text-xs text-muted-foreground">
-        Agents in bb save what they learn to Lobu and start each thread with it.
-      </p>
       <Steps status={status} reload={reload} />
     </Frame>
   );

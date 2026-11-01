@@ -14,6 +14,11 @@ Keep what your agents learn in Lobu memory, without leaving bb.
 - **Save to Lobu** on any message, and **Save learnings to Lobu** for a whole
   thread, through a review form.
 - **Open what bb saved in Lobu** opens Lobu's own page of those memories.
+- Type `@` in any composer to reference a memory, feed, automation, paired
+  device or connection, or open browser tab; it resolves into fresh context
+  when the message is sent.
+- Your Lobu **Inbox** sits on the New thread screen when bb is connected, and
+  `lobu` CLI logins you already have are reused, not duplicated.
 
 ## Getting started
 
