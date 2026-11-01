@@ -803,7 +803,10 @@ describe("the memory loop", () => {
       "conn:me:8",
       "dev:dev-1",
     ]);
-    expect((await connSearch({ query: "macbook", projectId: null })).map((item) => item.id)).toEqual(["dev:dev-1"]);
+    const macItems = await connSearch({ query: "macbook", projectId: null });
+    expect(macItems.map((item) => item.id)).toEqual(["dev:dev-1"]);
+    // Device rows name the device and read the platform as words, not a key.
+    expect(macItems[0]?.subtitle).toBe("darwin · online");
     // Connections show the connector's human name and the account, never the key.
     const gmailRow = (await connSearch({ query: "gmail", projectId: null }))[0];
     expect(gmailRow?.title).toBe("Gmail (me@ex.com)");

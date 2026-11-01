@@ -1077,7 +1077,10 @@ export default async function plugin(bb: BbPluginApi) {
         .map((device) => ({
           id: `dev:${device.id}`,
           title: device.label ?? device.workerId,
-          subtitle: `${device.platform ?? "device"} · ${device.online ? "online" : "offline"}`,
+          subtitle: subtitleFor(device.label ?? device.workerId, [
+            device.platform === null ? null : device.platform.replace(/[-_]/g, " "),
+            device.online ? "online" : "offline",
+          ]),
         }));
       const connectionItems = connections
         .filter((connection) =>
