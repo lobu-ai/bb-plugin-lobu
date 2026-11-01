@@ -786,6 +786,8 @@ describe("the memory loop", () => {
     const feedCtx = (await feedResolve("feed:me:82")).context;
     expect(feedCtx).toContain("slack:general");
     expect(feedCtx).toContain("auth expired");
+    // Resolved context links to Lobu's own page for the thing, not the org root.
+    expect(feedCtx).toContain(`http://localhost:${server.port}/me/connectors/slack/8`);
 
     // Automations: list and resolve to name, status, and trigger kinds.
     const autoSearch = byId("lobu-automation").search as (ctx: unknown) => Promise<{ id: string; title: string }[]>;
@@ -794,6 +796,7 @@ describe("the memory loop", () => {
     const autoCtx = (await autoResolve("auto:me:a-1")).context;
     expect(autoCtx).toContain("Morning digest");
     expect(autoCtx).toContain("schedule");
+    expect(autoCtx).toContain(`http://localhost:${server.port}/me/automations/a-1`);
 
     // Connections and devices: paired device plus connection, each resolvable.
     const connSearch = byId("lobu-connection").search as (ctx: unknown) => Promise<{ id: string; title: string; subtitle?: string }[]>;
@@ -820,6 +823,7 @@ describe("the memory loop", () => {
     const connCtx = (await connResolve("conn:me:7")).context;
     expect(connCtx).toContain("Gmail (me@ex.com)");
     expect(connCtx).toContain("active");
+    expect(connCtx).toContain(`http://localhost:${server.port}/me/connectors/gmail/7`);
     expect((await connResolve("conn:me:999")).context).toContain("no longer available");
   });
 

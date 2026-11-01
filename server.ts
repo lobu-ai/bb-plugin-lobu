@@ -206,15 +206,23 @@ export default async function plugin(bb: BbPluginApi) {
     const settled = await Promise.allSettled(
       [...owners.keys()].map(async (slug) => {
         const context = ownerOf(owners, slug).context;
-        const [feeds, automations, connections] = await Promise.all([
+        // One endpoint failing (an automations timeout, say) must not take the
+        // other two sections down with it.
+        const [feeds, automations, connections] = await Promise.allSettled([
           api.listFeeds(context, slug, 50),
           api.listAutomations(context, slug, 50),
           api.listConnections(context, slug),
         ]);
         return {
-          feeds: feeds.map((feed) => ({ ...feed, workspace: slug })),
-          automations: automations.map((automation) => ({ ...automation, workspace: slug })),
-          connections: connections.map((connection) => ({ ...connection, workspace: slug })),
+          feeds: (feeds.status === "fulfilled" ? feeds.value : []).map((feed) => ({ ...feed, workspace: slug })),
+          automations: (automations.status === "fulfilled" ? automations.value : []).map((automation) => ({
+            ...automation,
+            workspace: slug,
+          })),
+          connections: (connections.status === "fulfilled" ? connections.value : []).map((connection) => ({
+            ...connection,
+            workspace: slug,
+          })),
         };
       }),
     );
@@ -951,6 +959,19 @@ export default async function plugin(bb: BbPluginApi) {
     return connector.connectorName ?? connector.connectorKey;
   }
 
+  /** Lobu's page for a connection: its own card when we know the connector, else the list. */
+  function connectionUrl(
+    baseUrl: string,
+    workspace: string,
+    connectorKey: string | null,
+    connectionId: number | null,
+  ): string {
+    const root = `${baseUrl}/${encodeURIComponent(workspace)}/connectors`;
+    if (connectorKey === null) return root;
+    const connector = `${root}/${encodeURIComponent(connectorKey)}`;
+    return connectionId === null ? connector : `${connector}/${connectionId}`;
+  }
+
   /** The org a row lives in, but only when the login reaches more than one. */
   function workspaceLabel(lists: MentionLists, workspace: string): string | null {
     if (Object.keys(lists.workspaceNames).length < 2) return null;
@@ -1038,7 +1059,7 @@ export default async function plugin(bb: BbPluginApi) {
       ];
       if (feed.lastError !== null) lines.push(`Last error: ${feed.lastError}`);
       if (feed.itemsCollected !== null) lines.push(`Items collected: ${feed.itemsCollected}.`);
-      lines.push(`Open: ${baseUrl}/${workspace}`);
+      lines.push(`Open: ${connectionUrl(baseUrl, workspace, feed.connectorKey, feed.connectionId)}`);
       return { context: lines.join("\n") };
     } catch {
       return { context: fail };
@@ -1086,7 +1107,9 @@ export default async function plugin(bb: BbPluginApi) {
       if (automation.triggers !== null && automation.triggers.length > 0) {
         lines.push(`Triggers: ${automation.triggers.map((trigger) => trigger.kind).join(", ")}.`);
       }
-      lines.push(`Open: ${baseUrl}/${workspace}`);
+      lines.push(
+        `Open: ${baseUrl}/${encodeURIComponent(workspace)}/automations/${encodeURIComponent(automation.id)}`,
+      );
       return { context: lines.join("\n") };
     } catch {
       return { context: fail };
@@ -1180,7 +1203,7 @@ export default async function plugin(bb: BbPluginApi) {
         `Connection ${connection.displayName} via ${connection.connectorKey ?? "an unknown connector"} (${connection.status}) in ${workspace}.`,
       ];
       if (connection.errorMessage !== null) lines.push(`Error: ${connection.errorMessage}`);
-      lines.push(`Open: ${baseUrl}/${workspace}`);
+      lines.push(`Open: ${connectionUrl(baseUrl, workspace, connection.connectorKey, connection.id)}`);
       return { context: lines.join("\n") };
     } catch {
       return { context: fail };
