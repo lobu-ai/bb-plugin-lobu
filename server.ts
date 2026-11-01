@@ -152,6 +152,8 @@ export default async function plugin(bb: BbPluginApi) {
   const MENTION_CACHE_TTL_MS = 120_000;
   /** Enough of a page to say what it is, short enough to keep a send snappy. */
   const TAB_TEXT_CHARS = 800;
+  /** How long a resolve may spend refreshing before it answers from the cache. */
+  const RESOLVE_REFRESH_MS = 1500;
 
   /** Feeds, automations, connections, and devices for the login bb uses, cached briefly for @-mention filtering. */
   let mentionFlight: Promise<MentionLists> | null = null;
@@ -177,6 +179,27 @@ export default async function plugin(bb: BbPluginApi) {
       flight,
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 400)),
     ]);
+  }
+
+  /**
+   * A resolve runs while the user's message is waiting to go out, and `list_feeds`
+   * alone takes 4-6 seconds on a real account. Give every refresh a short leash
+   * and answer from the mention cache when it runs out.
+   */
+  async function withBound<T>(work: Promise<T>, ms: number): Promise<T | null> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), ms);
+        }),
+      ]);
+    } catch {
+      return null;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   /** One tab's title, URL, and text, bounded so a slow page cannot hold up a send. */
@@ -951,8 +974,13 @@ export default async function plugin(bb: BbPluginApi) {
       const owners = await memoryOwners();
       const owner = owners.get(workspace);
       if (owner === undefined) return { context: fail };
-      const result = (await api.readEvents(owner.context, workspace, [eventId])) as { content?: unknown[] };
-      const row = (Array.isArray(result.content) ? result.content : [])
+      const result = await withBound(
+        api.readEvents(owner.context, workspace, [eventId]).catch(() => null),
+        RESOLVE_REFRESH_MS,
+      );
+      if (result === null) return { context: fail };
+      const content = (result as { content?: unknown[] }).content;
+      const row = (Array.isArray(content) ? content : [])
         .map((candidate) => parseKnowledgeRow(candidate))
         .find((candidate) => candidate !== null && candidate.id === eventId);
       if (row === undefined || row === null) return { context: "That Lobu memory is no longer available in Lobu." };
@@ -1076,11 +1104,14 @@ export default async function plugin(bb: BbPluginApi) {
       const owner = owners.get(workspace);
       if (owner === undefined) return { context: fail };
       const { origin: baseUrl } = await reachLobu();
-      const feed = (await api.listFeeds(owner.context, workspace, 100)).find((candidate) => candidate.id === feedId);
+      const fresh = await withBound(api.listFeeds(owner.context, workspace, 100).catch(() => null), RESOLVE_REFRESH_MS);
+      const cached = (await mentionsForSearch())?.feeds.find((feed) => feed.workspace === workspace && feed.id === feedId);
+      const feed = fresh?.find((candidate) => candidate.id === feedId) ?? cached;
       if (feed === undefined) return { context: "That Lobu feed is no longer available in Lobu." };
       const lines = [
         `Feed ${feed.displayName} (${feed.status}) in ${workspace} via ${feed.connectorKey ?? "an unknown connector"}.`,
       ];
+      if (fresh === null) lines.push("(Status as of the last check; Lobu did not answer in time.)");
       if (feed.lastError !== null) lines.push(`Last error: ${feed.lastError}`);
       if (feed.itemsCollected !== null) lines.push(`Items collected: ${feed.itemsCollected}.`);
       lines.push(`Open: ${connectionUrl(baseUrl, workspace, feed.connectorKey, feed.connectionId)}`);
@@ -1123,11 +1154,17 @@ export default async function plugin(bb: BbPluginApi) {
       const owner = owners.get(workspace);
       if (owner === undefined) return { context: fail };
       const { origin: baseUrl } = await reachLobu();
-      const automation = (await api.listAutomations(owner.context, workspace, 100)).find(
-        (candidate) => candidate.id === automationId,
+      const fresh = await withBound(
+        api.listAutomations(owner.context, workspace, 100).catch(() => null),
+        RESOLVE_REFRESH_MS,
       );
+      const cached = (await mentionsForSearch())?.automations.find(
+        (automation) => automation.workspace === workspace && automation.id === automationId,
+      );
+      const automation = fresh?.find((candidate) => candidate.id === automationId) ?? cached;
       if (automation === undefined) return { context: "That Lobu automation is no longer available in Lobu." };
       const lines = [`Automation ${automation.name} (${automation.status}) in ${workspace}.`];
+      if (fresh === null) lines.push("(Status as of the last check; Lobu did not answer in time.)");
       if (automation.triggers !== null && automation.triggers.length > 0) {
         lines.push(`Triggers: ${automation.triggers.map((trigger) => trigger.kind).join(", ")}.`);
       }
@@ -1202,7 +1239,10 @@ export default async function plugin(bb: BbPluginApi) {
       const deviceMatch = /^dev:(.+)$/.exec(itemId);
       if (deviceMatch !== null && deviceMatch[1] !== undefined) {
         const deviceId = deviceMatch[1];
-        const device = (await api.listDevices(context)).find((candidate) => candidate.id === deviceId);
+        const devices = await withBound(api.listDevices(context).catch(() => null), RESOLVE_REFRESH_MS);
+        const device =
+          devices?.find((candidate) => candidate.id === deviceId) ??
+          (await mentionsForSearch())?.devices.find((candidate) => candidate.id === deviceId);
         if (device === undefined) return { context: "That Lobu device is no longer paired." };
         const lines = [
           `Device ${device.label ?? device.workerId} (${device.platform ?? "unknown platform"}): ${device.online ? "online" : "offline"}.`,
@@ -1219,13 +1259,20 @@ export default async function plugin(bb: BbPluginApi) {
       const owner = owners.get(workspace);
       if (owner === undefined) return { context: fail };
       const { origin: baseUrl } = await reachLobu();
-      const connection = (await api.listConnections(owner.context, workspace)).find(
-        (candidate) => candidate.id === Number(connectionMatch[2]),
+      const connectionId = Number(connectionMatch[2]);
+      const fresh = await withBound(
+        api.listConnections(owner.context, workspace).catch(() => null),
+        RESOLVE_REFRESH_MS,
       );
+      const cached = (await mentionsForSearch())?.connections.find(
+        (connection) => connection.workspace === workspace && connection.id === connectionId,
+      );
+      const connection = fresh?.find((candidate) => candidate.id === connectionId) ?? cached;
       if (connection === undefined) return { context: "That Lobu connection is no longer available in Lobu." };
       const lines = [
         `Connection ${connection.displayName} via ${connection.connectorKey ?? "an unknown connector"} (${connection.status}) in ${workspace}.`,
       ];
+      if (fresh === null) lines.push("(Status as of the last check; Lobu did not answer in time.)");
       if (connection.errorMessage !== null) lines.push(`Error: ${connection.errorMessage}`);
       lines.push(`Open: ${connectionUrl(baseUrl, workspace, connection.connectorKey, connection.id)}`);
       return { context: lines.join("\n") };

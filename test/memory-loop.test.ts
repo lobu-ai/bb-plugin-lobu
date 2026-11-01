@@ -39,6 +39,7 @@ const lobu = {
   connections: [] as Record<string, unknown>[],
   devices: [] as Record<string, unknown>[],
   tabs: [] as Record<string, unknown>[],
+  failFeeds: false,
   nextId: 1000,
 };
 
@@ -214,6 +215,7 @@ beforeAll(() => {
         return Response.json({ content });
       }
       if (tool === "manage_feeds" && body.action === "list_feeds") {
+        if (lobu.failFeeds) return new Response("lobu is having a moment", { status: 500 });
         const limit = typeof body.limit === "number" ? body.limit : 50;
         return Response.json({
           action: "list_feeds",
@@ -794,6 +796,14 @@ describe("the memory loop", () => {
     // Two workspaces are reachable here, so the org name is part of the label;
     // "Gmail" is dropped because the title already says it.
     expect((await feedSearch({ query: "gmail", projectId: null }))[0]?.subtitle).toBe("Me · active");
+    // A resolve runs while the message waits to go out; when the refresh fails
+    // it must answer from the mention cache instead of stalling or empty-handed.
+    lobu.failFeeds = true;
+    const staleFeed = (await feedResolve("feed:me:82")).context;
+    lobu.failFeeds = false;
+    expect(staleFeed).toContain("slack:general");
+    expect(staleFeed).toContain("as of the last check");
+
     const feedCtx = (await feedResolve("feed:me:82")).context;
     expect(feedCtx).toContain("slack:general");
     expect(feedCtx).toContain("auth expired");
