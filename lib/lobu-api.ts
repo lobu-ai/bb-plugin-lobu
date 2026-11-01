@@ -586,6 +586,32 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
         .filter((item): item is TabItem => item !== null);
     },
 
+    /**
+     * The visible text of one open tab, so an @-mention can hand the agent what
+     * the page says instead of only its title. Empty when the bridge refuses
+     * (a chrome:// page, a closed tab, a sleeping browser).
+     */
+    async readTabText(
+      context: string | null,
+      workspace: string,
+      connectionId: number,
+      tabId: number,
+      maxChars: number,
+    ): Promise<string> {
+      const result = (await request(context, `/api/${encodeURIComponent(workspace)}/manage_operations`, {
+        action: "execute",
+        connection_id: connectionId,
+        operation_key: "evaluate",
+        input: {
+          tab_id: tabId,
+          expression: `(() => { const text = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim(); return text.slice(0, ${Math.floor(maxChars)}); })()`,
+          await_promise: false,
+        },
+      })) as { output?: { value?: unknown } };
+      const value = result.output?.value;
+      return typeof value === "string" ? value.trim() : "";
+    },
+
     /** Devices paired to the user (user-scoped, not per workspace). */
     async listDevices(context: string | null): Promise<DeviceItem[]> {
       const listed = (await request(context, "/api/me/devices")) as { devices?: unknown[] };

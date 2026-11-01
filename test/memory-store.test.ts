@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { SavedRecord } from "../lib/memory-contract";
-import { briefFor, countUses, hitsFromSearch, learnedFor, parseSaved, parseThreadLogs } from "../lib/memory-store";
+import {
+  briefFor,
+  capThreadLogs,
+  countUses,
+  hitsFromSearch,
+  learnedFor,
+  parseSaved,
+  parseThreadLogs,
+} from "../lib/memory-store";
 
 const record = (overrides: Partial<SavedRecord>): SavedRecord => ({
   eventId: 1,
@@ -50,6 +58,52 @@ describe("stored data", () => {
     expect(parseSaved([record({}), { eventId: "nope" }, null]).map((r) => r.eventId)).toEqual([1]);
     expect(parseSaved("garbage")).toEqual([]);
     expect(Object.keys(parseThreadLogs({ good: { given: [], searches: [], updatedAt: 1 }, bad: { given: 3 } }))).toEqual(["good"]);
+  });
+});
+
+describe("thread log budget", () => {
+  const hit = (eventId: number, content: string) => ({
+    eventId,
+    workspace: "me",
+    title: `Memory ${eventId}`,
+    content,
+    url: null,
+    similarity: null,
+    occurredAt: null,
+  });
+  const log = (updatedAt: number, hits: number, chars: number) => ({
+    given: [],
+    searches: Array.from({ length: 30 }, (_, index) => ({
+      query: "x".repeat(400),
+      at: updatedAt + index,
+      results: Array.from({ length: 20 }, (_, n) => hit(n, "y".repeat(chars))),
+    })),
+    updatedAt,
+  });
+
+  test("keeps the serialized logs inside the plugin KV limit", () => {
+    const logs = Object.fromEntries(
+      Array.from({ length: 80 }, (_, index) => [`thread-${index}`, log(index, 20, 600)]),
+    );
+    const capped = capThreadLogs(logs);
+    const bytes = JSON.stringify(capped).length;
+    expect(bytes).toBeLessThan(200 * 1024);
+    expect(Object.keys(capped).length).toBeGreaterThan(0);
+    // The 256KB write limit is what broke the panel; this keeps a real thread.
+    expect(parseThreadLogs(capped)["thread-79"]).toBeDefined();
+  });
+
+  test("keeps the newest threads and shortens each hit", () => {
+    const logs = Object.fromEntries(
+      Array.from({ length: 80 }, (_, index) => [`thread-${index}`, log(index, 20, 600)]),
+    );
+    const capped = capThreadLogs(logs);
+    const kept = Object.keys(capped);
+    expect(kept[0]).toBe("thread-79");
+    const first = capped["thread-79"]!;
+    expect(first.searches.length).toBeLessThanOrEqual(20);
+    expect(first.searches[0]!.results.length).toBeLessThanOrEqual(5);
+    expect(first.searches[0]!.results[0]!.content.length).toBeLessThanOrEqual(200);
   });
 });
 

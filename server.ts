@@ -150,6 +150,8 @@ export default async function plugin(bb: BbPluginApi) {
   let mentionCache: MentionLists | null = null;
   /** Feeding the @-menu under the host's time box needs these lists warm: list_feeds alone takes seconds cold. Warmed on inbox/thread/project views; searches never wait on a refresh. */
   const MENTION_CACHE_TTL_MS = 120_000;
+  /** Enough of a page to say what it is, short enough to keep a send snappy. */
+  const TAB_TEXT_CHARS = 800;
 
   /** Feeds, automations, connections, and devices for the login bb uses, cached briefly for @-mention filtering. */
   let mentionFlight: Promise<MentionLists> | null = null;
@@ -175,6 +177,28 @@ export default async function plugin(bb: BbPluginApi) {
       flight,
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 400)),
     ]);
+  }
+
+  /** Visible text of a tab, bounded so a slow page cannot hold up a send. */
+  async function readTabTextBounded(
+    context: string | null,
+    workspace: string,
+    connectionId: number,
+    tabId: number,
+  ): Promise<string> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        api.readTabText(context, workspace, connectionId, tabId, TAB_TEXT_CHARS),
+        new Promise<string>((resolve) => {
+          timer = setTimeout(() => resolve(""), 1500);
+        }),
+      ]);
+    } catch {
+      return "";
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   /**
@@ -1245,11 +1269,23 @@ export default async function plugin(bb: BbPluginApi) {
       const owners = await memoryOwners();
       const owner = owners.get(workspace);
       if (owner === undefined) return { context: fail };
-      const tab = (await api.listTabs(owner.context, workspace, Number(match[2]))).find(
-        (candidate) => candidate.tabId === Number(match[3]),
-      );
-      if (tab === undefined) return { context: "That browser tab is no longer open." };
-      return { context: `- ${tab.title} (${tab.url})` };
+      const connectionId = Number(match[2]);
+      const tabId = Number(match[3]);
+      // The tab's own text is what makes the reference useful, but the send is
+      // waiting on this: read it alongside the re-listing and give up quietly.
+      const [listed, pageText] = await Promise.all([
+        api.listTabs(owner.context, workspace, connectionId).catch((): null => null),
+        readTabTextBounded(owner.context, workspace, connectionId, tabId),
+      ]);
+      const tab = listed === null ? undefined : listed.find((candidate) => candidate.tabId === tabId);
+      // The listing answered and the tab is gone: that is a closed tab, not a
+      // bridge hiccup. Only when the listing itself failed do we fall back to
+      // whatever the page read managed to return.
+      if (listed !== null && tab === undefined) return { context: "That browser tab is no longer open." };
+      if (tab === undefined && pageText === "") return { context: fail };
+      const lines = [tab === undefined ? `- Browser tab ${tabId}` : `- ${tab.title} (${tab.url})`];
+      if (pageText !== "") lines.push(`  Page text: ${pageText}`);
+      return { context: lines.join("\n") };
     } catch {
       return { context: fail };
     }

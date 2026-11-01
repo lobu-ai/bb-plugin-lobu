@@ -25,6 +25,14 @@ const MAX_SAVED = 500;
 const MAX_THREAD_LOGS = 300;
 /** Searches kept per thread. */
 const MAX_SEARCHES = 20;
+/** Kept in the store's own words: a panel row needs a line, not the whole memory. */
+const MAX_GIVEN = 20;
+const MAX_HITS_PER_SEARCH = 5;
+const MAX_HIT_CHARS = 200;
+const MAX_TITLE_CHARS = 200;
+const MAX_QUERY_CHARS = 200;
+/** Headroom under the 256KB limit, leaving room for the other KV keys' values. */
+const MAX_THREAD_LOG_BYTES = 200_000;
 /** bb truncates a plugin's thread instructions at 4096 characters; stay under it. */
 const BRIEF_BUDGET = 3800;
 const ITEM_CHARS = 320;
@@ -123,11 +131,40 @@ export function countUses(list: SavedRecord[], hits: readonly { eventId: number 
   return list.map((record) => (found.has(record.eventId) ? { ...record, uses: record.uses + 1, lastUsedAt: now } : record));
 }
 
-/** Keeps the most recently updated thread logs. */
+/**
+ * Keeps thread logs inside the plugin KV value limit (256KB), newest first.
+ * A single search stores its hits with their text, so a busy thread can grow
+ * past the limit on its own: hits keep a short excerpt, and the oldest threads
+ * drop off once the serialized logs would no longer fit.
+ */
 export function capThreadLogs(logs: Record<string, ThreadLog>): Record<string, ThreadLog> {
-  const entries = Object.entries(logs);
-  if (entries.length <= MAX_THREAD_LOGS) return logs;
-  return Object.fromEntries(entries.sort((a, b) => b[1].updatedAt - a[1].updatedAt).slice(0, MAX_THREAD_LOGS));
+  const entries = Object.entries(logs).sort((a, b) => b[1].updatedAt - a[1].updatedAt);
+  const kept: [string, ThreadLog][] = [];
+  let bytes = 2; // "{}"
+  for (const [id, log] of entries) {
+    if (kept.length >= MAX_THREAD_LOGS) break;
+    const trimmed = trimThreadLog(log);
+    const size = JSON.stringify({ [id]: trimmed }).length + (kept.length === 0 ? 0 : 1);
+    if (kept.length > 0 && bytes + size > MAX_THREAD_LOG_BYTES) break;
+    bytes += size;
+    kept.push([id, trimmed]);
+  }
+  return Object.fromEntries(kept);
+}
+
+function trimThreadLog(log: ThreadLog): ThreadLog {
+  return {
+    given: log.given.slice(0, MAX_GIVEN).map((given) => ({ ...given, title: given.title.slice(0, MAX_TITLE_CHARS) })),
+    searches: log.searches.slice(0, MAX_SEARCHES).map((search) => ({
+      ...search,
+      query: search.query.slice(0, MAX_QUERY_CHARS),
+      results: search.results.slice(0, MAX_HITS_PER_SEARCH).map((hit) => ({
+        ...hit,
+        content: hit.content.slice(0, MAX_HIT_CHARS),
+      })),
+    })),
+    updatedAt: log.updatedAt,
+  };
 }
 
 export function addSearch(log: ThreadLog | undefined, search: ThreadLog["searches"][number]): ThreadLog {

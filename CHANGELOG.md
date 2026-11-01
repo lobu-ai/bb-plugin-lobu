@@ -19,6 +19,12 @@
 - Feeds, automations, connections, devices, and browser tabs are read through
   Lobu's tool endpoints. A mention search answers from a warm cache, so it
   never outlives the time the composer gives it.
+- Picking a browser tab hands the agent the page's visible text along with its
+  title and URL, read once at send time and bounded so a slow page cannot hold
+  up the message.
+- Thread memory logs stay inside the plugin's storage limit: hits keep a short
+  excerpt and the oldest threads drop off, so a thread's Lobu panel no longer
+  loses its "Looked up" history.
 
 ## 0.5.0
 

@@ -116,9 +116,11 @@ memories, feeds, automations, paired devices and connections, and open
 browser tabs each get their own menu section. Picking one inserts a pill;
 at send time the plugin resolves it into fresh agent-only context (the full
 memory text, a feed or automation status summary, a device or connection
-status, the tab's title and URL). Resolving never
-blocks the send on a stale reference — an unreachable item degrades to a
-short note instead.
+status, the tab's title and URL, and the visible text of the page). Resolving
+never blocks the send on a stale reference — an unreachable item degrades to
+a short note instead. Reading a tab's text is read-only and bounded; if the
+browser is asleep or the page refuses, the reference falls back to its title
+and URL.
 
 ## Requirements
 
