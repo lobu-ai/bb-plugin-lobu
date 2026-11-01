@@ -229,6 +229,13 @@ beforeAll(() => {
           connections: lobu.connections.filter((c) => c.organization_id === workspace || c.workspace === workspace),
         });
       }
+      if (tool === "manage_operations" && body.action === "execute" && body.operation_key === "evaluate") {
+        return Response.json({
+          action: "execute",
+          status: "completed",
+          output: { value: "Inbox  (17)  Primary  Social  Promotions" },
+        });
+      }
       if (tool === "manage_operations" && body.action === "execute" && body.operation_key === "list_tabs") {
         return Response.json({
           action: "execute",
@@ -877,6 +884,8 @@ describe("the memory loop", () => {
     const tabCtx = (await tabResolve("tab:me:479:102")).context;
     expect(tabCtx).toContain("Lobu \u2014 Memory");
     expect(tabCtx).toContain("https://app.lobu.ai/buremba");
+    // The picked tab hands the agent what the page says, not just its address.
+    expect(tabCtx).toContain("Page text: Inbox  (17)  Primary  Social  Promotions");
     expect((await tabResolve("tab:me:479:999")).context).toContain("no longer open");
   });
 });
