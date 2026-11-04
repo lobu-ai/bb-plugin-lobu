@@ -3,6 +3,7 @@
 // functions here are pure; server.ts owns reading and writing storage.
 import { z } from "zod";
 import {
+  type EntityHit,
   type MemoryHit,
   type MemoryKind,
   memoryKinds,
@@ -93,7 +94,13 @@ export function applyReplacements(
   for (const { replacedEventId, record } of replacements) {
     const prior = replacedEventId ? oldById.get(replacedEventId) : undefined;
     const merged: SavedRecord =
-      prior !== undefined && record.projectId === null ? { ...record, projectId: prior.projectId } : record;
+      prior !== undefined
+        ? {
+            ...record,
+            projectId: record.projectId ?? prior.projectId,
+            entityIds: record.entityIds ?? prior.entityIds ?? null,
+          }
+        : record;
     records.push(merged);
     if (replacedEventId) byOldId.set(replacedEventId, merged);
   }
@@ -215,8 +222,10 @@ export function briefFor(input: {
   linkedWorkspace: string | null;
   pins: PinnedMemory[];
   learned: SavedRecord[];
+  projectEntity?: EntityHit | null;
+  activeTab?: { title: string; url: string } | null;
 }): Brief | null {
-  const { projectName, linkedWorkspace, pins } = input;
+  const { projectName, linkedWorkspace, pins, projectEntity, activeTab } = input;
   const learned = input.learned.slice(0, MAX_LEARNED_IN_BRIEF);
   if (pins.length === 0 && learned.length === 0) return null;
   const header = [
@@ -226,6 +235,18 @@ export function briefFor(input: {
   const given: ThreadLog["given"] = [];
   const lines: string[] = [];
   let used = header.join("\n").length + 200;
+
+  const ambient: string[] = [];
+  if (projectEntity) {
+    ambient.push(`- Matched project entity: ${projectEntity.name} (id: ${projectEntity.id}, type: ${projectEntity.type})`);
+  }
+  if (activeTab) {
+    ambient.push(`- Active browser tab: ${clip(activeTab.title, 120)} (${clip(activeTab.url, 160)})`);
+  }
+  if (ambient.length > 0) {
+    lines.push("", "Ambient workspace context:", ...ambient);
+  }
+
   const take = (heading: string, items: { eventId: number | null; workspace: string; title: string; content: string }[], source: "pinned" | "learned") => {
     const block: string[] = [];
     for (const item of items) {
@@ -264,6 +285,9 @@ export function hitsFromSearch(result: unknown, baseUrl: string): MemoryHit[] {
     if (item.platform !== SAVED_MEMORY_PLATFORM) return [];
     const text = typeof item.text_content === "string" ? item.text_content : "";
     const title = typeof item.title === "string" && item.title.trim() !== "" ? item.title : clip(text, 80);
+    const entityIds = Array.isArray(item.entity_ids)
+      ? item.entity_ids.filter((id): id is number => typeof id === "number" && Number.isInteger(id) && id > 0)
+      : undefined;
     return [
       {
         eventId: item.id,
@@ -273,9 +297,45 @@ export function hitsFromSearch(result: unknown, baseUrl: string): MemoryHit[] {
         url: `${baseUrl}/${item.workspace_slug}/events/${item.id}`,
         similarity: typeof item.similarity === "number" ? item.similarity : null,
         occurredAt: typeof item.occurred_at === "string" ? item.occurred_at : null,
+        ...(entityIds && entityIds.length > 0 ? { entityIds } : {}),
       },
     ];
   });
+}
+
+/** Entities among Lobu search results. */
+export function entitiesFromSearch(result: unknown, baseUrl: string, fallbackWorkspace: string): EntityHit[] {
+  if (typeof result !== "object" || result === null) return [];
+  const r = result as { entity?: unknown; matches?: unknown };
+  const rawEntities: Record<string, unknown>[] = [];
+  if (typeof r.entity === "object" && r.entity !== null) rawEntities.push(r.entity as Record<string, unknown>);
+  if (Array.isArray(r.matches)) {
+    for (const match of r.matches) {
+      if (typeof match === "object" && match !== null) rawEntities.push(match as Record<string, unknown>);
+    }
+  }
+  const seen = new Set<number>();
+  const entities: EntityHit[] = [];
+  for (const item of rawEntities) {
+    if (typeof item.id !== "number" || seen.has(item.id)) continue;
+    seen.add(item.id);
+    const name = typeof item.name === "string" && item.name.trim() !== "" ? item.name.trim() : `Entity ${item.id}`;
+    const slug = typeof item.slug === "string" && item.slug.trim() !== "" ? item.slug.trim() : String(item.id);
+    const type = typeof item.type === "string" && item.type.trim() !== "" ? item.type.trim() : "entity";
+    const ws =
+      typeof item.workspace_slug === "string" && item.workspace_slug.trim() !== ""
+        ? item.workspace_slug.trim()
+        : fallbackWorkspace;
+    entities.push({
+      id: item.id,
+      type,
+      name,
+      slug,
+      workspace: ws,
+      url: `${baseUrl}/${ws}/${type}/${slug}`,
+    });
+  }
+  return entities;
 }
 
 const VALID_KINDS = new Set<string>(memoryKinds);
@@ -291,6 +351,7 @@ interface RawKnowledgeItem {
   semanticType: string | null;
   title: string;
   content: string;
+  entityIds?: number[] | null;
   savedAt: number;
   supersededBy: number | null;
   isSuperseded: boolean;
@@ -313,6 +374,9 @@ function parseKnowledgeItems(result: unknown): RawKnowledgeItem[] {
       (typeof item.occurred_at === "string" ? Date.parse(item.occurred_at) : Number.NaN) ||
       (typeof item.created_at === "string" ? Date.parse(item.created_at) : Number.NaN) ||
       Date.now();
+    const entityIds = Array.isArray(item.entity_ids)
+      ? item.entity_ids.filter((id): id is number => typeof id === "number" && Number.isInteger(id) && id > 0)
+      : null;
     return [
       {
         id: item.id,
@@ -321,6 +385,7 @@ function parseKnowledgeItems(result: unknown): RawKnowledgeItem[] {
         semanticType: typeof item.semantic_type === "string" ? item.semantic_type : null,
         title,
         content: text || title,
+        entityIds,
         savedAt: ts,
         supersededBy: typeof item.superseded_by === "number" ? item.superseded_by : null,
         isSuperseded: item.is_superseded === true || typeof item.superseded_by === "number",
@@ -396,6 +461,7 @@ export function reconcileWorkspaceMemories(input: {
                 title: head.title,
                 content: head.content,
                 kind: head.kind ?? record.kind,
+                entityIds: head.entityIds ?? record.entityIds ?? null,
                 url: `${baseUrl}/${workspace}/events/${head.id}`,
               };
         if (head !== undefined) changed = true;
@@ -459,6 +525,7 @@ export function reconcileWorkspaceMemories(input: {
         url: `${baseUrl}/${workspace}/events/${item.id}`,
         threadId: "lobu",
         projectId: null,
+        entityIds: item.entityIds ?? null,
         savedAt: item.savedAt,
         uses: 0,
         lastUsedAt: null,

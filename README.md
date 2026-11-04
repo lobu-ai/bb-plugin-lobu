@@ -61,12 +61,16 @@ It works as a loop:
   4,096-character limit for plugin instructions.
 - **Agents search before they work.** A `lobu_search` tool (and `bb lobu search`
   CLI command for ACP providers that do not expose plugin tools) searches your
-  personal workspace and the Lobu workspace you linked to the project. Only
+  personal workspace and the Lobu workspace you linked to the project, returning
+  saved memories and any matching entities with their IDs. Only
   saved memories come back, not browser history or other connector content.
 - **Agents save and supersede what they learn.** A `lobu_remember` tool (and
   `bb lobu remember` CLI command) saves decisions, non-obvious facts, and
   standing preferences, at most three at a time and each with an evidence
-  quote. Passing `replacesEventId` (`--replaces-id`) supersedes an outdated
+  quote. The plugin automatically inspects the session's conversation transcription
+  and open desktop browser tabs to discover, link, or auto-create relevant Lobu entities
+  (projects, repositories, documentation, services), linking them directly to the
+  saved events in Lobu's graph. Passing `replacesEventId` (`--replaces-id`) supersedes an outdated
   memory instead of leaving both active. With **Save memories automatically**
   on (the default), saves go straight to your personal workspace, and anything
   Lobu already holds is skipped. With it off, a review form opens first.
@@ -112,10 +116,10 @@ thread first.
 ## Mentioning Lobu things in chat
 
 Type `@` in any bb composer to reference Lobu without pasting: saved
-memories, feeds, automations, paired devices and connections, and open
+memories, entities, feeds, automations, paired devices and connections, and open
 browser tabs each get their own menu section. Picking one inserts a pill;
 at send time the plugin resolves it into fresh agent-only context (the full
-memory text, a feed or automation status summary, a device or connection
+memory text, entity metadata and view link, a feed or automation status summary, a device or connection
 status, the tab's title and URL, and the visible text of the page). Resolving
 never blocks the send on a stale reference — an unreachable item degrades to
 a short note instead. Each resolve refreshes for at most 1.5 seconds and falls

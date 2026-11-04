@@ -9,7 +9,7 @@ const TITLE_MAX = 80;
 
 export interface SaveOutcome {
   workspace: string;
-  saved: { eventId: number; title: string; url: string | null; replacedEventId?: number }[];
+  saved: { eventId: number; title: string; url: string | null; entityIds?: number[]; replacedEventId?: number }[];
   failed: { title: string; error: string }[];
 }
 
@@ -71,7 +71,11 @@ export function absoluteUrl(viewUrl: string | null, baseUrl: string): string | n
 /** Same thread, workspace, and text saves once, even if the form is submitted twice. */
 export function idempotencyKey(threadId: string, workspace: string, memory: MemoryDraft): string {
   const replaces = memory.replacesEventId ? `\nreplaces:${memory.replacesEventId}` : "";
-  const digest = createHash("sha256").update(`${threadId}\n${workspace}\n${memory.title}\n${memory.content}${replaces}`).digest("hex");
+  const entities =
+    memory.entityIds && memory.entityIds.length > 0 ? `\nentities:${[...memory.entityIds].sort().join(",")}` : "";
+  const digest = createHash("sha256")
+    .update(`${threadId}\n${workspace}\n${memory.title}\n${memory.content}${replaces}${entities}`)
+    .digest("hex");
   return `bb-plugin-lobu:${digest}`;
 }
 
@@ -86,18 +90,21 @@ export async function saveMemories(
   const results = await Promise.all(
     submission.memories.map(async (memory) => {
       try {
+        const entityIds = memory.entityIds && memory.entityIds.length > 0 ? memory.entityIds : undefined;
         const saved = await api.saveMemory(owner.context, workspace, {
           title: memory.title,
           content: memory.content,
           semantic_type: memory.kind,
           idempotency_key: idempotencyKey(threadId, workspace, memory),
           ...(memory.replacesEventId ? { supersedes_event_id: memory.replacesEventId } : {}),
+          ...(entityIds ? { entity_ids: entityIds } : {}),
         });
         return {
           ok: true as const,
           eventId: saved.id,
           title: memory.title,
           url: absoluteUrl(saved.viewUrl, baseUrl),
+          ...(entityIds ? { entityIds } : {}),
           ...(memory.replacesEventId ? { replacedEventId: memory.replacesEventId } : {}),
         };
       } catch (cause) {
@@ -109,10 +116,11 @@ export async function saveMemories(
     workspace,
     saved: results
       .filter((r) => r.ok)
-      .map(({ eventId, title, url, replacedEventId }) => ({
+      .map(({ eventId, title, url, entityIds, replacedEventId }) => ({
         eventId,
         title,
         url,
+        ...(entityIds ? { entityIds } : {}),
         ...(replacedEventId === undefined ? {} : { replacedEventId }),
       })),
     failed: results.filter((r) => !r.ok).map(({ title, error }) => ({ title, error })),
@@ -131,7 +139,11 @@ export function describeOutcome(outcome: SaveOutcome): { title: string; detail: 
         ? `Saved ${plural(saved.length)} to ${workspace}`
         : `Saved ${saved.length} of ${saved.length + failed.length} memories to ${workspace}`;
   const lines = [
-    ...saved.map((m) => `- ${m.url === null ? m.title : `[${m.title}](${m.url})`}`),
+    ...saved.map((m) => {
+      const link = m.url === null ? m.title : `[${m.title}](${m.url})`;
+      const entities = m.entityIds && m.entityIds.length > 0 ? ` (entities: ${m.entityIds.join(", ")})` : "";
+      return `- ${link}${entities}`;
+    }),
     ...failed.map((m) => `- Not saved: ${m.title} (${m.error})`),
   ];
   return { title, detail: lines.join("\n") };

@@ -98,6 +98,23 @@ describe("proposal schemas", () => {
       memoryProposalSchema.safeParse({ ...legacy, evidence: "User: staging fails on office wifi" }).success,
     ).toBe(true);
   });
+  test("accepts entityIds and normalizes entity_ids alias", () => {
+    const withCamel = memoryProposalSchema.safeParse({
+      ...legacy,
+      evidence: "User: staging fails",
+      entityIds: [42, 99],
+    });
+    expect(withCamel.success).toBe(true);
+    if (withCamel.success) expect(withCamel.data.entityIds).toEqual([42, 99]);
+
+    const withSnake = memoryProposalSchema.safeParse({
+      ...legacy,
+      evidence: "User: staging fails",
+      entity_ids: [123],
+    });
+    expect(withSnake.success).toBe(true);
+    if (withSnake.success) expect(withSnake.data.entityIds).toEqual([123]);
+  });
 });
 
 describe("saveMemories", () => {
@@ -136,6 +153,18 @@ describe("saveMemories", () => {
     const [a, b] = first.saves;
     expect(a?.memory.idempotency_key).not.toBe(b?.memory.idempotency_key);
     expect(idempotencyKey("thread-2", "acme", submission.memories[0]!)).not.toBe(a?.memory.idempotency_key);
+  });
+
+  test("passes entity_ids to saveMemory and describes them in outcome", async () => {
+    const { api, saves } = fakeApi();
+    const entitySubmission = rememberSubmissionSchema.parse({
+      workspace: "acme",
+      memories: [{ title: "Project rule", content: "Link to repo", kind: "fact", entityIds: [10, 20] }],
+    });
+    const outcome = await saveMemories(api, owner(), BASE, "thread-1", entitySubmission);
+    expect(saves[0]?.memory.entity_ids).toEqual([10, 20]);
+    expect(outcome.saved[0]?.entityIds).toEqual([10, 20]);
+    expect(describeOutcome(outcome).detail).toContain("(entities: 10, 20)");
   });
 });
 

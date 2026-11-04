@@ -4,6 +4,7 @@ import {
   briefFor,
   capThreadLogs,
   countUses,
+  entitiesFromSearch,
   hitsFromSearch,
   learnedFor,
   parseSaved,
@@ -40,6 +41,35 @@ describe("briefFor", () => {
     expect(brief.text).toContain("including the team workspace");
     expect(brief.given[0]).toEqual({ eventId: null, workspace: "me", title: "Pinned note", source: "pinned" });
     expect(brief.given.length).toBeLessThanOrEqual(9);
+  });
+
+  test("includes ambient project entity and active browser tab when present", () => {
+    const pins = [{ eventId: null, workspace: "me", title: "Pinned note", content: "Pinned body", url: null, pinnedAt: 1 }];
+    const projectEntity = {
+      id: 42,
+      type: "project",
+      name: "Acme App",
+      slug: "acme-app",
+      workspace: "me",
+      url: "http://localhost/me/project/acme-app",
+    };
+    const activeTab = {
+      title: "Acme App Dashboard",
+      url: "https://acme.example.com/dashboard",
+    };
+    const brief = briefFor({
+      projectName: "Acme",
+      linkedWorkspace: null,
+      pins,
+      learned: [],
+      projectEntity,
+      activeTab,
+    })!;
+    expect(brief.text).toContain("Ambient workspace context:");
+    expect(brief.text).toContain("Matched project entity: Acme App (id: 42, type: project)");
+    expect(brief.text).toContain("Active browser tab: Acme App Dashboard (https://acme.example.com/dashboard)");
+    expect(brief.given).toHaveLength(1);
+    expect(brief.given[0].source).toBe("pinned");
   });
 });
 
@@ -113,7 +143,7 @@ describe("hitsFromSearch", () => {
       {
         entity: { id: 5 },
         content: [
-          { id: 7, title: "", text_content: "Body text here", similarity: 0.8, workspace_slug: "me", occurred_at: "2026-10-01", platform: "lobu" },
+          { id: 7, title: "", text_content: "Body text here", similarity: 0.8, workspace_slug: "me", occurred_at: "2026-10-01", platform: "lobu", entity_ids: [42, 99] },
           { id: 8, title: "A web page", text_content: "Visited", similarity: 0.9, workspace_slug: "me", platform: "chrome.history" },
           { id: "x", workspace_slug: "me", platform: "lobu" },
         ],
@@ -129,7 +159,28 @@ describe("hitsFromSearch", () => {
         url: "https://lobu.example/me/events/7",
         similarity: 0.8,
         occurredAt: "2026-10-01",
+        entityIds: [42, 99],
       },
+    ]);
+  });
+});
+
+describe("entitiesFromSearch", () => {
+  test("extracts unique entities from entity and matches", () => {
+    const entities = entitiesFromSearch(
+      {
+        entity: { id: 10, name: "Acme", slug: "acme", type: "company", workspace_slug: "team" },
+        matches: [
+          { id: 10, name: "Acme duplicate", slug: "acme", type: "company", workspace_slug: "team" },
+          { id: 20, name: "Project Lobu", slug: "lobu", type: "project", workspace_slug: "team" },
+        ],
+      },
+      "https://lobu.example",
+      "team",
+    );
+    expect(entities).toEqual([
+      { id: 10, type: "company", name: "Acme", slug: "acme", workspace: "team", url: "https://lobu.example/team/company/acme" },
+      { id: 20, type: "project", name: "Project Lobu", slug: "lobu", workspace: "team", url: "https://lobu.example/team/project/lobu" },
     ]);
   });
 });

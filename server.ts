@@ -13,6 +13,7 @@ import type { ChildProcess } from "node:child_process";
 import { createLobuApi, kindOfOrigin, lobuOrigin, pickCloudContext, pickOriginContext, type AutomationItem, type CliContext, type ConnectionItem, type DeviceItem, type FeedItem, type TabItem } from "./lib/lobu-api";
 import { hasProject, isServing, lastLogLine, LOCAL_CONTEXT, localFolders, localPort, macAppOwnsLocal, startLocal } from "./lib/local";
 import {
+  type EntityHit,
   type MemoryDraft,
   type MemoryHit,
   memoryKinds,
@@ -41,6 +42,7 @@ import {
   briefFor,
   capThreadLogs,
   countUses,
+  entitiesFromSearch,
   hitsFromSearch,
   learnedFor,
   LINKS_KEY,
@@ -386,11 +388,95 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   const projectNames = new Map<string, string>();
+  const projectEntityCache = new Map<string, EntityHit | null>();
+
+  async function resolveProjectEntity(projectId: string, projectName: string): Promise<EntityHit | null> {
+    if (projectEntityCache.has(projectId)) return projectEntityCache.get(projectId)!;
+    if (!projectName || projectName === "this project" || projectName === "Personal") {
+      projectEntityCache.set(projectId, null);
+      return null;
+    }
+    try {
+      const hits = await findEntities(projectId, projectName, 5);
+      if (hits.length === 0) {
+        projectEntityCache.set(projectId, null);
+        return null;
+      }
+      const norm = projectName.trim().toLowerCase();
+      const match =
+        hits.find((h) => h.name.toLowerCase() === norm || h.slug.toLowerCase() === norm) ??
+        hits.find((h) => h.name.toLowerCase().includes(norm) || norm.includes(h.name.toLowerCase())) ??
+        hits[0];
+      projectEntityCache.set(projectId, match);
+      return match;
+    } catch {
+      return null;
+    }
+  }
+
+  const bbTabCache = new Map<string, { title: string; url: string }>();
+
+  async function refreshBbBrowserTab(threadId: string): Promise<{ title: string; url: string } | null> {
+    const sdk = bb.sdk as unknown as {
+      hosts?: { list(): Promise<{ id: string }[]> };
+      experimental_desktopBrowsers?: {
+        listInstances(req: { hostId: string }): Promise<{ instances: { instanceId: string; generation: string }[] }>;
+        listTabs(scope: { instanceId: string; generation: string; threadId: string }): Promise<{
+          tabs: { tabId: string; url: string; title: string; presentation?: "hidden" | "reveal" }[];
+        }>;
+      };
+    };
+    if (!sdk.hosts || !sdk.experimental_desktopBrowsers) return null;
+    try {
+      const hosts = await sdk.hosts.list().catch(() => []);
+      for (const host of hosts) {
+        const { instances } = await sdk.experimental_desktopBrowsers.listInstances({ hostId: host.id }).catch(() => ({ instances: [] }));
+        for (const instance of instances) {
+          const { tabs } = await sdk.experimental_desktopBrowsers
+            .listTabs({ instanceId: instance.instanceId, generation: instance.generation, threadId })
+            .catch(() => ({ tabs: [] }));
+          if (tabs.length === 0) continue;
+          const active = tabs.find((t) => t.presentation === "reveal") ?? tabs[0];
+          if (active && active.url && active.url !== "about:blank") {
+            const result = { title: active.title || active.url, url: active.url };
+            bbTabCache.set(threadId, result);
+            return result;
+          }
+        }
+      }
+    } catch {
+      // BB desktop browser not reachable
+    }
+    return null;
+  }
+
+  function activeBrowserTab(threadId?: string | null): { title: string; url: string; source: "bb" | "chrome" } | null {
+    // 1. BB native desktop browser tab (primary)
+    if (threadId && bbTabCache.has(threadId)) {
+      const tab = bbTabCache.get(threadId)!;
+      return { ...tab, source: "bb" };
+    }
+    // 2. Fall back to external Chrome connector if available
+    if (mentionCache && mentionCache.tabs.length > 0) {
+      const active =
+        mentionCache.tabs.find((t) => t.active && t.windowFocused) ??
+        mentionCache.tabs.find((t) => t.active) ??
+        null;
+      if (active) return { title: active.title, url: active.url, source: "chrome" };
+    }
+    return null;
+  }
+
   async function refreshProjects(): Promise<void> {
     // The personal project holds threads started with "Don't work in a project".
     const projects = await bb.sdk.projects.list({ includePersonal: true });
     projectNames.clear();
     for (const project of projects) projectNames.set(project.id, project.name);
+    void Promise.allSettled(
+      projects
+        .filter((p) => p.name && p.name !== "Personal")
+        .map((p) => resolveProjectEntity(p.id, p.name)),
+    );
   }
   void refreshProjects().catch((cause: unknown) => bb.log.warn(`Lobu could not list bb projects: ${String(cause)}`));
 
@@ -482,9 +568,10 @@ export default async function plugin(bb: BbPluginApi) {
     );
   }
   void syncLobuMemories().catch(() => undefined);
+  void mentionLists().catch(() => undefined);
 
   /** A project's Lobu link, pins, and the brief its threads start with. */
-  function projectState(projectId: string) {
+  function projectState(projectId: string, threadId?: string | null) {
     const name = projectNames.get(projectId) ?? "this project";
     const workspace = memory.links[projectId] ?? null;
     const pins = memory.pins[projectId] ?? [];
@@ -493,7 +580,27 @@ export default async function plugin(bb: BbPluginApi) {
     const learned = learnedFor(projectId, memory.saved, workspace, knownPersonalSlug).filter(
       (record) => !pinned.has(record.eventId),
     );
-    return { name, workspace, pins, learned, brief: briefFor({ projectName: name, linkedWorkspace: workspace, pins, learned }) };
+    const projectEntity = projectEntityCache.get(projectId) ?? null;
+    if (projectEntity === null && !projectEntityCache.has(projectId)) {
+      void resolveProjectEntity(projectId, name);
+    }
+    const activeTab = activeBrowserTab(threadId);
+    return {
+      name,
+      workspace,
+      pins,
+      learned,
+      projectEntity,
+      activeTab,
+      brief: briefFor({
+        projectName: name,
+        linkedWorkspace: workspace,
+        pins,
+        learned,
+        projectEntity,
+        activeTab: activeTab ? { title: activeTab.title, url: activeTab.url } : null,
+      }),
+    };
   }
 
   function projectView(projectId: string): ProjectMemory {
@@ -531,8 +638,17 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
-  /** Searches the personal workspace and the project's linked one, best first. No logging or use counting — mentions and agents share this. */
-  async function findMemories(projectId: string | null, query: string, limit: number): Promise<MemoryHit[]> {
+  interface SearchResults {
+    hits: MemoryHit[];
+    entities: EntityHit[];
+  }
+
+  /** Searches memories and entities in the personal workspace and the project's linked one. */
+  async function findMemoriesAndEntities(
+    projectId: string | null,
+    query: string,
+    limit: number,
+  ): Promise<SearchResults> {
     const owners = await memoryOwners();
     const targets = new Set<string>();
     const personal = personalOf(owners);
@@ -543,12 +659,38 @@ export default async function plugin(bb: BbPluginApi) {
     const { origin: baseUrl } = await reachLobu();
     // Search returns connector content too; ask for more so enough saved memories remain.
     const fetchLimit = Math.min(limit * 3, 30);
-    const lists = await Promise.all(
-      [...targets].map(async (slug) => hitsFromSearch(await api.searchMemory(ownerOf(owners, slug).context, slug, query, fetchLimit), baseUrl)),
+    const responses = await Promise.all(
+      [...targets].map(async (slug) => {
+        const raw = await api.searchMemory(ownerOf(owners, slug).context, slug, query, fetchLimit);
+        return {
+          hits: hitsFromSearch(raw, baseUrl),
+          entities: entitiesFromSearch(raw, baseUrl, slug),
+        };
+      }),
     );
-    const best = new Map<number, MemoryHit>();
-    for (const hit of lists.flat()) if (!best.has(hit.eventId)) best.set(hit.eventId, hit);
-    return [...best.values()].sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0)).slice(0, limit);
+    const bestHits = new Map<number, MemoryHit>();
+    const bestEntities = new Map<number, EntityHit>();
+    for (const res of responses) {
+      for (const hit of res.hits) if (!bestHits.has(hit.eventId)) bestHits.set(hit.eventId, hit);
+      for (const ent of res.entities) if (!bestEntities.has(ent.id)) bestEntities.set(ent.id, ent);
+    }
+    return {
+      hits: [...bestHits.values()].sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0)).slice(0, limit),
+      entities: [...bestEntities.values()].slice(0, limit),
+    };
+  }
+
+  async function findMemories(projectId: string | null, query: string, limit: number): Promise<MemoryHit[]> {
+    return (await findMemoriesAndEntities(projectId, query, limit)).hits;
+  }
+
+  /** Searches entities in the personal workspace and the project's linked one. */
+  async function findEntities(projectId: string | null, query: string, limit: number): Promise<EntityHit[]> {
+    try {
+      return (await findMemoriesAndEntities(projectId, query, limit)).entities;
+    } catch {
+      return [];
+    }
   }
 
   interface AutoSaveOutcome {
@@ -556,6 +698,277 @@ export default async function plugin(bb: BbPluginApi) {
     saved: SavedRecord[];
     duplicates: { title: string; existing: MemoryHit }[];
     failed: { title: string; error: string }[];
+  }
+
+  async function listSessionTabs(threadId: string | null): Promise<{ title: string; url: string }[]> {
+    if (!threadId) return [];
+    const sdk = bb.sdk as unknown as {
+      hosts?: { list(): Promise<{ id: string }[]> };
+      experimental_desktopBrowsers?: {
+        listInstances(req: { hostId: string }): Promise<{ instances: { instanceId: string; generation: string }[] }>;
+        listTabs(scope: { instanceId: string; generation: string; threadId: string }): Promise<{
+          tabs: { tabId: string; url: string; title: string; presentation?: "hidden" | "reveal" }[];
+        }>;
+      };
+    };
+    if (!sdk.hosts || !sdk.experimental_desktopBrowsers) return [];
+    try {
+      const hosts = await sdk.hosts.list().catch(() => []);
+      const sessionTabs: { title: string; url: string }[] = [];
+      for (const host of hosts) {
+        const { instances } = await sdk.experimental_desktopBrowsers.listInstances({ hostId: host.id }).catch(() => ({ instances: [] }));
+        for (const instance of instances) {
+          const { tabs } = await sdk.experimental_desktopBrowsers
+            .listTabs({ instanceId: instance.instanceId, generation: instance.generation, threadId })
+            .catch(() => ({ tabs: [] }));
+          for (const tab of tabs) {
+            if (tab.url && tab.url !== "about:blank") {
+              sessionTabs.push({ title: tab.title || tab.url, url: tab.url });
+            }
+          }
+        }
+      }
+      return sessionTabs;
+    } catch {
+      return [];
+    }
+  }
+
+  const workspaceEntityTypesCache = new Map<string, string[]>();
+  const entityCacheByName = new Map<string, EntityHit | null>();
+
+  function sanitizeSlug(raw: string): string {
+    const s = raw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    return s.slice(0, 50) || "entity";
+  }
+
+  async function resolveAvailableEntityType(
+    context: string | null,
+    workspace: string,
+    preferred: string,
+    fallback = "product",
+  ): Promise<string> {
+    if (!workspaceEntityTypesCache.has(workspace)) {
+      const types = await api.listEntityTypes(context, workspace).catch(() => []);
+      workspaceEntityTypesCache.set(workspace, types.length > 0 ? types : ["product", "repository", "document"]);
+    }
+    const available = workspaceEntityTypesCache.get(workspace) ?? [];
+    if (available.length === 0) return preferred;
+    if (available.includes(preferred)) return preferred;
+    if (available.includes(fallback)) return fallback;
+    return available[0] ?? preferred;
+  }
+
+  async function ensureEntity(
+    projectId: string | null,
+    spec: { name: string; slug?: string; preferredType?: string; metadata?: Record<string, unknown> },
+  ): Promise<EntityHit | null> {
+    const name = spec.name.trim();
+    if (!name || name.length < 2) return null;
+    const slug = sanitizeSlug(spec.slug ?? name);
+    const cacheKey = `${projectId ?? "global"}:${slug}`;
+    if (entityCacheByName.has(cacheKey)) return entityCacheByName.get(cacheKey)!;
+
+    // 1. Search existing entities (semantic search + exact matching)
+    try {
+      const hits = await findEntities(projectId, name, 5);
+      const exact = hits.find(
+        (h) => h.name.toLowerCase() === name.toLowerCase() || h.slug.toLowerCase() === slug.toLowerCase(),
+      );
+      if (exact) {
+        entityCacheByName.set(cacheKey, exact);
+        return exact;
+      }
+    } catch {
+      // Best-effort search
+    }
+
+    // 2. Also search via direct entity list if possible
+    try {
+      const owners = await memoryOwners();
+      const personal = personalOf(owners);
+      if (personal) {
+        const directList = await api.listEntities(personal.owner.context, personal.slug, { search: name, limit: 5 });
+        const exact = directList.find(
+          (h) => h.name.toLowerCase() === name.toLowerCase() || h.slug.toLowerCase() === slug.toLowerCase(),
+        );
+        if (exact) {
+          entityCacheByName.set(cacheKey, exact);
+          return exact;
+        }
+      }
+    } catch {
+      // Best-effort list
+    }
+
+    // 3. Not found: auto-create in user's personal Lobu workspace
+    try {
+      const owners = await memoryOwners();
+      const personal = personalOf(owners);
+      if (!personal) return null;
+
+      const entityType = await resolveAvailableEntityType(
+        personal.owner.context,
+        personal.slug,
+        spec.preferredType ?? "product",
+        "product",
+      );
+
+      const created = await api.createEntity(personal.owner.context, personal.slug, {
+        entity_type: entityType,
+        name,
+        slug,
+        metadata: spec.metadata,
+      });
+      entityCacheByName.set(cacheKey, created);
+      return created;
+    } catch (cause) {
+      bb.log.warn(`Could not auto-create entity ${name}: ${String(cause)}`);
+      return null;
+    }
+  }
+
+  async function ensureProjectEntity(projectId: string, projectName: string): Promise<EntityHit | null> {
+    if (!projectName || projectName === "this project" || projectName === "Personal") return null;
+    const existing = await resolveProjectEntity(projectId, projectName);
+    if (existing !== null) return existing;
+    const created = await ensureEntity(projectId, {
+      name: projectName,
+      slug: projectId,
+      preferredType: "product",
+    });
+    if (created) projectEntityCache.set(projectId, created);
+    return created;
+  }
+
+  async function discoverSessionEntities(
+    threadId: string | null,
+    projectId: string | null,
+    extraText: string,
+  ): Promise<{ entityIds: number[]; entities: EntityHit[]; sessionTabs: { title: string; url: string }[] }> {
+    const sessionTabs = await listSessionTabs(threadId);
+    const discoveredIds = new Set<number>();
+    const discoveredEntities: EntityHit[] = [];
+
+    const addEntity = (entity: EntityHit | null) => {
+      if (!entity) return;
+      if (!discoveredIds.has(entity.id)) {
+        discoveredIds.add(entity.id);
+        discoveredEntities.push(entity);
+      }
+    };
+
+    // 1. Project Entity (auto-resolved or auto-created if missing)
+    if (projectId) {
+      const projectName = projectNames.get(projectId) ?? "";
+      const pEntity = projectEntityCache.get(projectId) ?? (await ensureProjectEntity(projectId, projectName));
+      addEntity(pEntity);
+    }
+
+    // 2. Open Tabs in Session: Look for GitHub repos, app URLs, docs, or tools
+    for (const tab of sessionTabs) {
+      try {
+        const parsed = new URL(tab.url);
+        if (parsed.hostname === "github.com") {
+          const parts = parsed.pathname.split("/").filter(Boolean);
+          if (parts.length >= 2) {
+            const owner = parts[0];
+            const repoSlug = parts[1];
+            const repoName = `${owner}/${repoSlug}`;
+
+            // Check existing entities matching repo slug or name
+            const hits = await findEntities(projectId, repoSlug, 3);
+            for (const h of hits) addEntity(h);
+
+            // Ensure specific repository entity exists
+            const repoEntity = await ensureEntity(projectId, {
+              name: repoName,
+              slug: repoSlug,
+              preferredType: "repository",
+              metadata: { url: tab.url, origin: "github", owner, repo: repoSlug },
+            });
+            addEntity(repoEntity);
+          }
+        } else if (tab.title && tab.title.length > 2) {
+          const cleanTitle = tab.title
+            .replace(/\s*[-—|]\s*(Google Chrome|Arc|Safari|Brave|Firefox|Linear|GitHub)$/i, "")
+            .trim();
+          if (
+            cleanTitle.length > 2 &&
+            !cleanTitle.toLowerCase().includes("untitled") &&
+            parsed.protocol.startsWith("http")
+          ) {
+            const hits = await findEntities(projectId, cleanTitle.slice(0, 40), 2);
+            for (const h of hits) addEntity(h);
+
+            if (hits.length === 0) {
+              const docEntity = await ensureEntity(projectId, {
+                name: cleanTitle,
+                slug: sanitizeSlug(cleanTitle),
+                preferredType: "document",
+                metadata: { url: tab.url, hostname: parsed.hostname },
+              });
+              addEntity(docEntity);
+            }
+          }
+        }
+      } catch {
+        // Invalid URL
+      }
+    }
+
+    // 3. Transcript Context: inspect conversation turns for repos, services, and topics
+    if (threadId && threadId !== "cli") {
+      try {
+        const transcript = await readTranscript(threadId);
+        if (transcript && transcript.text) {
+          // Extract GitHub repo mentions (e.g. github.com/owner/repo)
+          const ghMatches = transcript.text.matchAll(/github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)/g);
+          for (const match of ghMatches) {
+            const owner = match[1];
+            const repoSlug = match[2];
+            const hits = await findEntities(projectId, repoSlug, 2);
+            for (const h of hits) addEntity(h);
+            const hit = await ensureEntity(projectId, {
+              name: `${owner}/${repoSlug}`,
+              slug: repoSlug,
+              preferredType: "repository",
+              metadata: { origin: "github", owner, repo: repoSlug },
+            });
+            addEntity(hit);
+          }
+
+          // Search recent transcript turns for discussed entities
+          const sample = transcript.text.slice(-3000);
+          const turns = sample.split("\n\n").filter((t) => t.trim().length > 10).slice(-4);
+          for (const turn of turns) {
+            const query = turn.replace(/[^\w\s-]/g, " ").slice(0, 80).trim();
+            if (query.length > 4) {
+              const hits = await findEntities(projectId, query, 2);
+              for (const h of hits) addEntity(h);
+            }
+          }
+        }
+      } catch {
+        // Transcript reading is best-effort
+      }
+    }
+
+    // 4. Also check extraText (memory proposal text) for entity matches
+    if (extraText) {
+      try {
+        const hits = await findEntities(projectId, extraText.slice(0, 80), 3);
+        for (const h of hits) addEntity(h);
+      } catch {
+        // Search is best-effort
+      }
+    }
+
+    return {
+      entityIds: [...discoveredIds],
+      entities: discoveredEntities,
+      sessionTabs,
+    };
   }
 
   /** Saves drafts straight to the personal workspace, skipping what Lobu already holds. Null without a personal workspace. */
@@ -566,22 +979,45 @@ export default async function plugin(bb: BbPluginApi) {
     const { origin: baseUrl } = await reachLobu();
     const outcome: AutoSaveOutcome = { workspace: personal.slug, saved: [], duplicates: [], failed: [] };
     const replacements: { replacedEventId?: number | null; record: SavedRecord }[] = [];
+
+    await refreshBbBrowserTab(threadId);
+    const sessionDiscovery = await discoverSessionEntities(
+      threadId,
+      projectId,
+      drafts.map((d) => `${d.title} ${d.content}`).join("\n"),
+    );
+
     for (const draft of drafts) {
       try {
-        const near = hitsFromSearch(
-          await api.searchMemory(personal.owner.context, personal.slug, `${draft.title}\n${draft.content}`, 10),
-          baseUrl,
-        ).find((hit) => hit.eventId !== draft.replacesEventId && (hit.similarity ?? 0) >= DUPLICATE_SIMILARITY);
+        const rawNear = await api.searchMemory(personal.owner.context, personal.slug, `${draft.title}\n${draft.content}`, 10);
+        const near = hitsFromSearch(rawNear, baseUrl).find(
+          (hit) => hit.eventId !== draft.replacesEventId && (hit.similarity ?? 0) >= DUPLICATE_SIMILARITY,
+        );
         if (near !== undefined) {
           outcome.duplicates.push({ title: draft.title, existing: near });
           continue;
         }
+
+        const explicitEntityIds = draft.entityIds && draft.entityIds.length > 0 ? draft.entityIds : [];
+        const finalEntityIds: number[] = [...explicitEntityIds];
+        if (finalEntityIds.length === 0) {
+          for (const id of sessionDiscovery.entityIds) {
+            if (!finalEntityIds.includes(id)) finalEntityIds.push(id);
+          }
+          const matchedEntities = entitiesFromSearch(rawNear, baseUrl, personal.slug);
+          for (const ent of matchedEntities) {
+            if (!finalEntityIds.includes(ent.id)) finalEntityIds.push(ent.id);
+          }
+        }
+        const entityIdsToSend = finalEntityIds.length > 0 ? finalEntityIds : undefined;
+
         const saved = await api.saveMemory(personal.owner.context, personal.slug, {
           title: draft.title,
           content: draft.content,
           semantic_type: draft.kind,
-          idempotency_key: idempotencyKey(threadId, personal.slug, draft),
+          idempotency_key: idempotencyKey(threadId, personal.slug, { ...draft, entityIds: entityIdsToSend }),
           ...(draft.replacesEventId ? { supersedes_event_id: draft.replacesEventId } : {}),
+          ...(entityIdsToSend ? { entity_ids: entityIdsToSend } : {}),
         });
         const record: SavedRecord = {
           eventId: saved.id,
@@ -592,6 +1028,7 @@ export default async function plugin(bb: BbPluginApi) {
           url: absoluteUrl(saved.viewUrl, baseUrl),
           threadId,
           projectId,
+          entityIds: entityIdsToSend ?? null,
           savedAt: Date.now(),
           uses: 0,
           lastUsedAt: null,
@@ -610,7 +1047,10 @@ export default async function plugin(bb: BbPluginApi) {
     const lines: string[] = [];
     if (outcome.saved.length > 0) {
       lines.push(`Saved to the user's personal Lobu workspace (${outcome.workspace}):`);
-      for (const record of outcome.saved) lines.push(`- ${record.title}`);
+      for (const record of outcome.saved) {
+        const entityTag = record.entityIds && record.entityIds.length > 0 ? ` [entities: ${record.entityIds.join(", ")}]` : "";
+        lines.push(`- ${record.title}${entityTag}`);
+      }
     }
     if (outcome.duplicates.length > 0) {
       lines.push("Already in Lobu, so not saved again:");
@@ -633,7 +1073,8 @@ export default async function plugin(bb: BbPluginApi) {
 
   // Every thread starts with its project's brief: pins, then what earlier threads learned.
   bb.agents.contributeInstructions(({ threadId, projectId }) => {
-    const { brief } = projectState(projectId);
+    void refreshBbBrowserTab(threadId);
+    const { brief } = projectState(projectId, threadId);
     if (brief === null) return null;
     const log = memory.logs[threadId];
     if (log === undefined || log.given.length === 0) {
@@ -673,9 +1114,21 @@ export default async function plugin(bb: BbPluginApi) {
     const submission = rememberSubmissionSchema.parse(value);
     const owner = owners.get(submission.workspace);
     if (owner === undefined) throw new Error(`Unknown workspace ${submission.workspace}`);
+    const projectId = await projectOfThread(threadId);
+    const sessionDiscovery = await discoverSessionEntities(
+      threadId,
+      projectId,
+      submission.memories.map((m) => `${m.title} ${m.content}`).join("\n"),
+    );
+    if (sessionDiscovery.entityIds.length > 0) {
+      for (const m of submission.memories) {
+        if (!m.entityIds || m.entityIds.length === 0) {
+          m.entityIds = [...sessionDiscovery.entityIds];
+        }
+      }
+    }
     const outcome = await saveMemories(api, owner, (await reachLobu()).origin, threadId, submission);
     await bb.storage.kv.set(PREFERRED_WORKSPACE, submission.workspace);
-    const projectId = await projectOfThread(threadId);
     const now = Date.now();
     rememberWithReplacements(
       outcome.saved.flatMap((saved) => {
@@ -693,6 +1146,7 @@ export default async function plugin(bb: BbPluginApi) {
               url: saved.url,
               threadId,
               projectId,
+              entityIds: saved.entityIds ?? memoryDraft.entityIds ?? null,
               savedAt: now,
               uses: 0,
               lastUsedAt: null,
@@ -778,6 +1232,11 @@ export default async function plugin(bb: BbPluginApi) {
       return;
     }
     const title = thread.title ?? thread.titleFallback ?? "Untitled thread";
+    const sessionTabs = await listSessionTabs(thread.id);
+    const tabsNote =
+      sessionTabs.length > 0
+        ? `\n\nOpen browser tabs during this session:\n${sessionTabs.map((t) => `- ${t.title}: ${t.url}`).join("\n")}`
+        : "";
     const worker = await bb.sdk.threads.spawn({
       projectId: thread.projectId,
       environment: { type: "project-default" },
@@ -785,7 +1244,7 @@ export default async function plugin(bb: BbPluginApi) {
       visibility: "hidden",
       title: `Lobu recap: ${title}`,
       pluginMetadata: { [RECAP_SOURCE_KEY]: thread.id, [RECAP_TITLE_KEY]: title },
-      prompt: recapPrompt(title, transcript.text),
+      prompt: recapPrompt(title, transcript.text + tabsNote),
     });
     await finishRecap(worker.id);
   }
@@ -861,7 +1320,7 @@ export default async function plugin(bb: BbPluginApi) {
   ): Promise<{ connected: boolean; hits: MemoryHit[]; text: string }> {
     if ((await memoryOwners()).size === 0) return { connected: false, hits: [], text: NOT_CONNECTED };
     const projectId = ctx.projectId ?? (ctx.threadId === null ? null : await projectOfThread(ctx.threadId));
-    const hits = await findMemories(projectId, query, limit);
+    const { hits, entities } = await findMemoriesAndEntities(projectId, query, limit);
     const now = Date.now();
     if (ctx.threadId !== null) {
       memory.logs = capThreadLogs({ ...memory.logs, [ctx.threadId]: addSearch(memory.logs[ctx.threadId], { query, at: now, results: hits }) });
@@ -872,17 +1331,30 @@ export default async function plugin(bb: BbPluginApi) {
       memory.saved = counted;
       void persist(SAVED_KEY, memory.saved);
     }
-    if (hits.length === 0) {
+    if (hits.length === 0 && entities.length === 0) {
       return { connected: true, hits: [], text: "Nothing in the user's Lobu memory matches. Continue without it." };
     }
-    const text = hits
-      .map((hit) => {
-        const when = hit.occurredAt === null ? "" : `, ${hit.occurredAt.slice(0, 10)}`;
-        const body = hit.content.replace(/\s+/g, " ").trim().slice(0, 600);
-        return `- ${hit.title} (${hit.workspace} memory ${hit.eventId}${when})\n  ${body}`;
-      })
-      .join("\n");
-    return { connected: true, hits, text };
+    const sections: string[] = [];
+    if (entities.length > 0) {
+      sections.push(
+        "Matched entities:\n" +
+          entities.map((e) => `- ${e.name} (${e.type}, id: ${e.id}) in ${e.workspace}`).join("\n"),
+      );
+    }
+    if (hits.length > 0) {
+      sections.push(
+        hits
+          .map((hit) => {
+            const when = hit.occurredAt === null ? "" : `, ${hit.occurredAt.slice(0, 10)}`;
+            const entityTag =
+              hit.entityIds && hit.entityIds.length > 0 ? `, entities: ${hit.entityIds.join(", ")}` : "";
+            const body = hit.content.replace(/\s+/g, " ").trim().slice(0, 600);
+            return `- ${hit.title} (${hit.workspace} memory ${hit.eventId}${when}${entityTag})\n  ${body}`;
+          })
+          .join("\n"),
+      );
+    }
+    return { connected: true, hits, text: sections.join("\n\n") };
   }
 
   interface MentionRow {
@@ -1329,6 +1801,72 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
+  /** Lobu entities matching a query for @-mentions. Never throws. */
+  async function mentionEntityItems(query: string, projectId: string | null): Promise<MentionRow[]> {
+    try {
+      const owners = await memoryOwners();
+      if (owners.size === 0) return [];
+      const trimmed = query.trim();
+      const entities = await withBound(
+        findEntities(projectId, trimmed === "" ? "a" : trimmed, 8).catch(() => []),
+        1500,
+      );
+      return (entities ?? []).map((ent) => ({
+        id: `ent:${ent.workspace}:${ent.id}`,
+        title: ent.name,
+        subtitle: `${ent.type} · ${ent.workspace}`,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Fresh entity details for an @-mention. Never throws: throwing would block the send. */
+  async function resolveEntityItem(itemId: string): Promise<{ context: string }> {
+    const fail = "That Lobu entity is currently unreachable in Lobu. Continue without it.";
+    try {
+      const match = /^ent:([^:]+):(\d+)$/.exec(itemId);
+      if (match === null || match[1] === undefined || match[2] === undefined) {
+        return { context: "Unknown Lobu entity reference." };
+      }
+      const workspace = match[1];
+      const entityId = Number(match[2]);
+      const owners = await memoryOwners();
+      const owner = owners.get(workspace);
+      if (owner === undefined) return { context: fail };
+      const { origin: baseUrl } = await reachLobu();
+      const result = await withBound(
+        api.readEntity(owner.context, workspace, entityId).catch(() => null),
+        RESOLVE_REFRESH_MS,
+      );
+      if (result === null || typeof result !== "object") return { context: fail };
+      const ent = (result as { entity?: Record<string, unknown> }).entity;
+      if (ent === undefined || typeof ent.id !== "number") {
+        return { context: "That Lobu entity is no longer available in Lobu." };
+      }
+      const name = typeof ent.name === "string" ? ent.name : `Entity ${ent.id}`;
+      const type = typeof ent.type === "string" ? ent.type : "entity";
+      const slug = typeof ent.slug === "string" ? ent.slug : String(ent.id);
+      const lines = [
+        `Entity ${name} (${type}, id: ${ent.id}) in ${workspace}.`,
+        `URL: ${baseUrl}/${workspace}/${type}/${slug}`,
+      ];
+      if (typeof ent.metadata === "object" && ent.metadata !== null && Object.keys(ent.metadata).length > 0) {
+        lines.push(`Metadata: ${JSON.stringify(ent.metadata)}`);
+      }
+      return { context: lines.join("\n") };
+    } catch {
+      return { context: fail };
+    }
+  }
+
+  bb.ui.registerMentionProvider({
+    id: "lobu-entity",
+    label: "Lobu entities",
+    search: ({ query, projectId }) => mentionEntityItems(query, projectId),
+    resolve: (itemId) => resolveEntityItem(itemId),
+  });
+
   bb.ui.registerMentionProvider({
     id: "lobu-memory",
     label: "Lobu memory",
@@ -1368,7 +1906,7 @@ export default async function plugin(bb: BbPluginApi) {
     description:
       "Save memories worth keeping to the user's Lobu memory. With the user's auto-save setting on, they go straight to the personal workspace and the user can undo them; otherwise the user reviews them in a form first.",
     instructions:
-      "When a task leaves something worth keeping across sessions, call lobu_remember once at the end with at most three short, self-contained memories. Propose one only if a different agent, on a different task next month, would act differently because of it: a decision, a non-obvious fact or gotcha, or a preference the user stated as a standing rule. Most tasks contain nothing worth keeping; then do not call the tool. Never propose what the task built or changed, anything the repo or code already states, generic quality wishes, task requirements, or one-off values. Each memory needs a short evidence quote of the turn or finding it came from. Never include secrets, credentials, or temporary state. Name the workspace a memory belongs to when it is team knowledge rather than the user's own. When correcting an outdated memory shown in the brief or returned by lobu_search, pass its event id as replacesEventId so the stale memory is superseded instead of keeping both. Use lobu_remember rather than other memory-saving tools, so the user can see and undo what was saved. If lobu_remember is not in your tool list, run `bb lobu remember --title ... --content ... --kind ... --evidence ...` (with `--replaces-id <id>` when replacing an older memory).",
+      "When a task leaves something worth keeping across sessions, call lobu_remember once at the end with at most three short, self-contained memories. Propose one only if a different agent, on a different task next month, would act differently because of it: a decision, a non-obvious fact or gotcha, or a preference the user stated as a standing rule. Most tasks contain nothing worth keeping; then do not call the tool. Never propose what the task built or changed, anything the repo or code already states, generic quality wishes, task requirements, or one-off values. Each memory needs a short evidence quote of the turn or finding it came from. Never include secrets, credentials, or temporary state. Name the workspace a memory belongs to when it is team knowledge rather than the user's own. The memory system automatically inspects the session transcript and open browser tabs to discover, link, or create relevant Lobu entities (projects, repos, documents). You can also explicitly pass entity IDs in entityIds when known. When correcting an outdated memory shown in the brief or returned by lobu_search, pass its event id as replacesEventId so the stale memory is superseded instead of keeping both. Use lobu_remember rather than other memory-saving tools, so the user can see and undo what was saved. If lobu_remember is not in your tool list, run `bb lobu remember --title ... --content ... --kind ... --evidence ...` (with `--replaces-id <id>` when replacing an older memory, `--entity-ids <id,id>` when linking entities).",
     presentation: {
       label: { pending: "Saving memories to Lobu", completed: "Lobu memory" },
       icon: { glyph: "lobu/memory" },
@@ -1500,12 +2038,24 @@ export default async function plugin(bb: BbPluginApi) {
               aliases: ["supersedes-event-id"],
               description: "Event ID of an older Lobu memory this corrects or replaces",
             },
+            "entity-ids": {
+              type: "string",
+              aliases: ["entity-id"],
+              description: "Comma-separated Lobu entity IDs to associate with this memory",
+            },
             json: {
               type: "boolean",
               description: "Output JSON",
             },
           },
           async run({ options }, ctx) {
+            const entityIds =
+              options["entity-ids"]
+                ? options["entity-ids"]
+                    .split(",")
+                    .map((s) => Number(s.trim()))
+                    .filter((n) => Number.isInteger(n) && n > 0)
+                : null;
             const parsed = memoryProposalSchema.safeParse({
               title: options.title,
               content: options.content,
@@ -1513,6 +2063,7 @@ export default async function plugin(bb: BbPluginApi) {
               evidence: options.evidence,
               workspace: options.workspace ?? null,
               replacesEventId: options["replaces-id"] ?? null,
+              entityIds: entityIds && entityIds.length > 0 ? entityIds : null,
             });
             if (!parsed.success) {
               const issue = parsed.error.issues[0];
@@ -1774,12 +2325,19 @@ export default async function plugin(bb: BbPluginApi) {
       const owners = await memoryOwners();
       const owner = ownerOf(owners, workspace);
       const { origin: baseUrl } = await reachLobu();
-      const draft: MemoryDraft = { title: record.title, content: record.content, kind: record.kind };
+      const draft: MemoryDraft = {
+        title: record.title,
+        content: record.content,
+        kind: record.kind,
+        entityIds: record.entityIds,
+      };
+      const entityIds = record.entityIds && record.entityIds.length > 0 ? record.entityIds : undefined;
       const saved = await api.saveMemory(owner.context, workspace, {
         title: record.title,
         content: record.content,
         semantic_type: record.kind,
         idempotency_key: idempotencyKey(`share:${record.eventId}`, workspace, draft),
+        ...(entityIds ? { entity_ids: entityIds } : {}),
       });
       const url = absoluteUrl(saved.viewUrl, baseUrl);
       remember([
@@ -1788,6 +2346,7 @@ export default async function plugin(bb: BbPluginApi) {
           eventId: saved.id,
           workspace,
           url,
+          entityIds: record.entityIds,
           savedAt: Date.now(),
           uses: 0,
           lastUsedAt: null,

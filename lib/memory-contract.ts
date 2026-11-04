@@ -16,14 +16,23 @@ export const memoryDraftSchema = z.object({
   workspace: z.string().trim().min(1).nullish(),
   /** Event id of an older saved memory this one corrects or replaces (shown in lobu_search and the project brief). */
   replacesEventId: z.number().int().positive().nullish(),
+  /** Lobu entity IDs to link this memory with (e.g. projects, people, repositories). */
+  entityIds: z.array(z.number().int().positive()).nullish(),
 });
 export type MemoryDraft = z.infer<typeof memoryDraftSchema>;
 
 /** What agents must send: evidence is required, so invented preferences fail validation. */
-export const memoryProposalSchema = memoryDraftSchema.extend({
-  evidence: z.string().trim().min(1).max(500),
-});
-export type MemoryProposal = z.infer<typeof memoryProposalSchema>;
+export const memoryProposalSchema = memoryDraftSchema
+  .extend({
+    evidence: z.string().trim().min(1).max(500),
+    /** Accepts snake_case alias commonly used in Lobu APIs. */
+    entity_ids: z.array(z.number().int().positive()).nullish(),
+  })
+  .transform(({ entity_ids, ...data }) => ({
+    ...data,
+    entityIds: data.entityIds ?? entity_ids ?? null,
+  }));
+export type MemoryProposal = z.output<typeof memoryProposalSchema>;
 
 /** What the review form shows. Drafts stay capped at ten so recaps queued by older tool versions still parse. */
 export const rememberFormSchema = z.object({
@@ -58,6 +67,7 @@ export const savedRecordSchema = z.object({
   url: z.string().nullable(),
   threadId: z.string(),
   projectId: z.string().nullable(),
+  entityIds: z.array(z.number()).nullish(),
   savedAt: z.number(),
   /** Times a lobu_search result returned this memory. */
   uses: z.number(),
@@ -72,6 +82,7 @@ export const pinnedMemorySchema = z.object({
   title: z.string(),
   content: z.string(),
   url: z.string().nullable(),
+  entityIds: z.array(z.number()).nullish(),
   pinnedAt: z.number(),
 });
 export type PinnedMemory = z.infer<typeof pinnedMemorySchema>;
@@ -85,8 +96,20 @@ export const memoryHitSchema = z.object({
   url: z.string().nullable(),
   similarity: z.number().nullable(),
   occurredAt: z.string().nullable(),
+  entityIds: z.array(z.number()).nullish(),
 });
 export type MemoryHit = z.infer<typeof memoryHitSchema>;
+
+/** One entity matching a Lobu search or mention query. */
+export const entityHitSchema = z.object({
+  id: z.number(),
+  type: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  workspace: z.string(),
+  url: z.string().nullable(),
+});
+export type EntityHit = z.infer<typeof entityHitSchema>;
 
 /** What a thread was handed at its start, and what its agent looked up. */
 export const threadLogSchema = z.object({
