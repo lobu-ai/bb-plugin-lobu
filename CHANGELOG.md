@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
+- Automatic session entity discovery & graph linking: when memories are saved or
+  archived threads are recapped, the memory system automatically inspects open BB
+  desktop browser tabs and conversation turns to discover, resolve, or auto-create
+  relevant Lobu entities (projects, repositories, documentation, and tools), linking
+  their IDs directly into the saved memory events in Lobu's knowledge graph.
+- Native BB desktop browser tabs (`bb.sdk.experimental_desktopBrowsers`) are
+  prioritized as the primary browser context for thread sessions ahead of external
+  Chrome bridge connections.
 - Setup reuses the Lobu logins you already have instead of creating new ones.
   The Connect card and Settings → Plugins → Lobu list every `lobu` CLI context
   as a collapsible **CONTEXT** list with a checkmark on the login bb uses, so
