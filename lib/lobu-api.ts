@@ -7,6 +7,8 @@ import type { EntityHit } from "./memory-contract";
 /** How long a `lobu whoami` session is reused before asking the CLI again. */
 const SESSION_TTL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+/** The semantic types save_memory writes; read_knowledge filters by these. */
+const MEMORY_KINDS = ["fact", "decision", "preference", "observation", "note"] as const;
 /** A new Lobu on this machine loads its search model on the first search, which takes longer. */
 const LOCAL_REQUEST_TIMEOUT_MS = 120_000;
 
@@ -540,16 +542,21 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
     },
 
     /**
-     * Recent memories in one workspace for the Lobu page. `platforms` filters
-     * connector connections rather than an event's own platform, so this reads
-     * by semantic type and keeps the rows with no connector behind them.
+     * Saved memories in one workspace, filtered by kind and date; with a
+     * query, the best matches. `read_knowledge` carries all of it in one call.
      */
-    async recentMemories(context: string | null, workspace: string, limit: number): Promise<unknown> {
+    async filteredMemories(
+      context: string | null,
+      workspace: string,
+      input: { query: string | null; kinds: readonly string[]; since: string | null; limit: number },
+    ): Promise<unknown> {
       const result = await request(context, `/api/${encodeURIComponent(workspace)}/read_knowledge`, {
-        semantic_type: ["fact", "decision", "preference", "observation", "note"],
-        sort_by: "date",
-        sort_order: "desc",
-        limit,
+        ...(input.query === null
+          ? { sort_by: "date", sort_order: "desc" }
+          : { query: input.query, sort_by: "score" }),
+        semantic_type: input.kinds.length > 0 ? input.kinds : MEMORY_KINDS,
+        ...(input.since === null ? {} : { since: input.since }),
+        limit: input.limit,
         include_total: false,
       });
       // read_knowledge leaves platform empty for a workspace save; only

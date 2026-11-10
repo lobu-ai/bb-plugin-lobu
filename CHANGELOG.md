@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **All of Lobu** filters: pick a workspace, memory kinds, and a time window
+  (24h, 7 days, or 30 days). Filtered search reads through Lobu's
+  `read_knowledge`, so one call per workspace carries the query and filters.
+
 ## 0.7.2
 
 - The page header's link is **Open in browser**, and the context picker says

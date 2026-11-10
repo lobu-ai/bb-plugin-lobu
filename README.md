@@ -48,8 +48,9 @@ save to, and how many memories bb has saved there, with a link to them. It lists
   **Mark read**. The first five stay in view and **Show all** unfolds the rest.
 - **Memories** — **Saved from bb** (the default) lists what agents saved in
   bb threads, with the project, how often search has reused it, and links to
-  the Lobu event and the source thread. **All of Lobu** searches the newest
-  memories across every workspace the login reaches.
+  the Lobu event and the source thread. **All of Lobu** searches across every
+  workspace the login reaches, filtered by workspace, memory kind, and time
+  window (24h, 7 days, or 30 days).
 - **Devices and connections** — paired devices with their online state, plus
   the connections that report an error or a broken status, with **Manage in
   Lobu** for the rest.

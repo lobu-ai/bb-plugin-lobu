@@ -2120,16 +2120,29 @@ export default async function plugin(bb: BbPluginApi) {
    * the login reaches, or the best matches for a query. A workspace that
    * fails only drops its own rows, so one bad login never blanks the page.
    */
-  async function panelMemories(query: string | null, limit: number) {
+  async function panelMemories(
+    query: string | null,
+    limit: number,
+    filter: { workspace: string | null; kinds: string[]; since: string | null },
+  ) {
     const owners = await memoryOwners();
     if (owners.size === 0) throw new Error(`No Lobu workspace is available. ${SETUP_HINT}`);
     const { origin: baseUrl } = await reachLobu();
+    const targets =
+      filter.workspace === null ? [...owners] : [...owners].filter(([slug]) => slug === filter.workspace);
+    if (targets.length === 0) {
+      throw new Error(`The Lobu login bb uses cannot reach the ${filter.workspace} workspace.`);
+    }
     const pages = await Promise.all(
-      [...owners].map(async ([slug, owner]) => {
-        const raw =
-          query === null
-            ? await api.recentMemories(owner.context, slug, Math.min(limit * 3, 100)).catch(() => undefined)
-            : await api.searchMemory(owner.context, slug, query, Math.min(limit * 3, 30)).catch(() => undefined);
+      targets.map(async ([slug, owner]) => {
+        const raw = await api
+          .filteredMemories(owner.context, slug, {
+            query,
+            kinds: filter.kinds,
+            since: filter.since,
+            limit: Math.min(limit * 3, 100),
+          })
+          .catch(() => undefined);
         return { slug, ok: raw !== undefined, hits: raw === undefined ? [] : hitsFromSearch(raw, baseUrl, slug) };
       }),
     );
@@ -2143,7 +2156,11 @@ export default async function plugin(bb: BbPluginApi) {
     } else {
       hits.sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
     }
-    return { hits: hits.slice(0, limit), failed: pages.filter((page) => !page.ok).map((page) => page.slug) };
+    return {
+      hits: hits.slice(0, limit),
+      failed: pages.filter((page) => !page.ok).map((page) => page.slug),
+      workspaces: [...owners].map(([slug, owner]) => ({ slug, name: owner.name })),
+    };
   }
 
   // Concurrent card renders share one status computation instead of each
@@ -2306,9 +2323,13 @@ export default async function plugin(bb: BbPluginApi) {
       await api.markNotificationRead(owner.context, workspace, notificationId);
       return { read: true };
     },
-    memories: async ({ query, limit }) => {
+    memories: async ({ query, limit, workspace, kinds, since }) => {
       const text = query?.trim() ?? "";
-      return panelMemories(text === "" ? null : text, limit ?? 30);
+      return panelMemories(text === "" ? null : text, limit ?? 30, {
+        workspace: workspace ?? null,
+        kinds: kinds ?? [],
+        since: since ?? null,
+      });
     },
     savedMemories: async () => {
       await syncLobuMemories().catch(() => undefined);

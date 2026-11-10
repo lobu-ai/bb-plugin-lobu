@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { UrlLink, useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
 import type { PanelConnection, PanelDevice, PanelMemory, rpcContract, SetupStatus } from "@/lib/contract";
-import type { SavedRecord } from "@/lib/memory-contract";
+import { memoryKinds, type MemoryKind, type SavedRecord } from "@/lib/memory-contract";
 import { InboxSection } from "@/components/inbox";
 import { isConnected, SetupCard, useSetupStatus } from "@/components/setup";
 import { Button } from "@/components/ui/button";
@@ -141,6 +141,10 @@ function MemoriesSection() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshes, setRefreshes] = useState(0);
+  const [workspace, setWorkspace] = useState<string | null>(null);
+  const [kinds, setKinds] = useState<MemoryKind[]>([]);
+  const [since, setSince] = useState<"1d" | "7d" | "30d" | null>(null);
+  const [workspaces, setWorkspaces] = useState<{ slug: string; name: string }[]>([]);
   // Only the newest request may write state: a slow recent list must not
   // overwrite the results of a query the user typed after it.
   const request = useRef(0);
@@ -174,12 +178,19 @@ function MemoriesSection() {
       const id = ++request.current;
       setLoading(true);
       rpc
-        .call("memories", { query: text === "" ? null : text, limit: MEMORY_LIMIT })
+        .call("memories", {
+          query: text === "" ? null : text,
+          limit: MEMORY_LIMIT,
+          workspace,
+          kinds,
+          since,
+        })
         .then(
           (page) => {
             if (id !== request.current) return;
             setHits(page.hits);
             setFailed(page.failed);
+            setWorkspaces(page.workspaces);
             setError(null);
           },
           (cause: unknown) => {
@@ -191,7 +202,7 @@ function MemoriesSection() {
           if (id === request.current) setLoading(false);
         });
     },
-    [rpc],
+    [rpc, workspace, kinds, since],
   );
 
   useEffect(() => {
@@ -201,7 +212,7 @@ function MemoriesSection() {
       load("");
       return;
     }
-    if (text.length < 2) return;
+    if (text.length < 3) return;
     const timer = setTimeout(() => load(text), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [view, query, load, refreshes]);
@@ -289,6 +300,73 @@ function MemoriesSection() {
               <Icon name="lobu/refresh" className={cn("size-4", loading && "animate-spin")} />
             </Button>
           </div>
+          <div className="flex flex-wrap items-center gap-1.5 pb-2">
+            <select
+              aria-label="Workspace filter"
+              value={workspace ?? ""}
+              onChange={(event) => setWorkspace(event.target.value === "" ? null : event.target.value)}
+              className="h-7 max-w-44 cursor-pointer rounded-md border border-input bg-transparent px-2 text-xs"
+            >
+              <option value="">All workspaces</option>
+              {workspaces.map((item) => (
+                <option key={item.slug} value={item.slug}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Time filter"
+              value={since ?? ""}
+              onChange={(event) =>
+                setSince(event.target.value === "" ? null : (event.target.value as "1d" | "7d" | "30d"))
+              }
+              className="h-7 cursor-pointer rounded-md border border-input bg-transparent px-2 text-xs"
+            >
+              <option value="">Any time</option>
+              <option value="1d">Last 24h</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+            </select>
+            <button
+              type="button"
+              aria-pressed={kinds.length === 0}
+              onClick={() => setKinds([])}
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-[11px]",
+                kinds.length === 0
+                  ? "border-foreground bg-muted font-medium text-foreground"
+                  : "border-border text-muted-foreground hover:text-foreground",
+              )}
+            >
+              All kinds
+            </button>
+            {memoryKinds.map((kind) => {
+              const active = kinds.includes(kind);
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() =>
+                    setKinds((current) =>
+                      active ? current.filter((item) => item !== kind) : [...current, kind],
+                    )
+                  }
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[11px] capitalize",
+                    active
+                      ? "border-foreground bg-muted font-medium text-foreground"
+                      : "border-border text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {kind}
+                </button>
+              );
+            })}
+          </div>
+          {query.trim() !== "" && query.trim().length < 3 ? (
+            <p className="pb-2 text-xs text-muted-foreground">Type at least 3 characters to search.</p>
+          ) : null}
           {error !== null ? (
             <Retry label={error} onRetry={refresh} />
           ) : hits === null ? (

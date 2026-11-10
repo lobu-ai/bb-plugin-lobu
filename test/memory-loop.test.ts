@@ -221,11 +221,20 @@ beforeAll(() => {
           return Response.json({ content });
         }
         const limit = typeof body.limit === "number" ? body.limit : 50;
+        const kinds = Array.isArray(body.semantic_type)
+          ? (body.semantic_type as string[])
+          : typeof body.semantic_type === "string"
+            ? [body.semantic_type]
+            : null;
+        const query = typeof body.query === "string" ? body.query : null;
         const content = lobu.memories
           .filter((m) => m.workspace === workspace && !m.deleted && m.supersededBy === null)
-          .slice(-limit)
-          .reverse()
-          .map((m) => ({
+          .filter((m) => kinds === null || kinds.includes(m.kind))
+          .map((m) => ({ m, score: query === null ? 0 : similarity(query, m) }))
+          .filter(({ score }) => query === null || score > 0)
+          .sort((a, b) => (query === null ? b.m.id - a.m.id : b.score - a.score))
+          .slice(0, limit)
+          .map(({ m, score }) => ({
             id: m.id,
             title: m.title,
             text_content: m.content,
@@ -234,6 +243,7 @@ beforeAll(() => {
             platform: "lobu",
             superseded_by: null,
             is_superseded: false,
+            ...(query === null ? {} : { similarity: score }),
           }));
         return Response.json({ content });
       }
@@ -1272,6 +1282,20 @@ describe("the memory loop", () => {
     const found = (await rpc.memories!({ query: "deploys run", limit: 10 })) as { hits: { eventId: number }[] };
     expect(found.hits.some((hit) => hit.eventId === 9102)).toBe(true);
     expect(found.hits.some((hit) => hit.eventId === 9101)).toBe(false);
+
+    const decisions = (await rpc.memories!({ query: null, kinds: ["decision"], limit: 100 })) as {
+      hits: { eventId: number }[];
+    };
+    expect(decisions.hits.some((hit) => hit.eventId === 9102)).toBe(true);
+    expect(decisions.hits.some((hit) => hit.eventId === 9101)).toBe(false);
+
+    const teamOnly = (await rpc.memories!({ query: null, workspace: "team", limit: 100 })) as {
+      hits: { eventId: number; workspace: string }[];
+      workspaces: { slug: string }[];
+    };
+    expect(teamOnly.hits.some((hit) => hit.eventId === 9102)).toBe(true);
+    expect(teamOnly.hits.every((hit) => hit.workspace === "team")).toBe(true);
+    expect(teamOnly.workspaces.map((workspace) => workspace.slug).sort()).toEqual(["me", "team"]);
 
     const saved = (await rpc.savedMemories!({})) as {
       records: { title: string; projectName: string | null; threadId: string }[];

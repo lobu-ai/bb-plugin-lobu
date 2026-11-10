@@ -3,6 +3,7 @@ import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
   learnResultSchema,
+  memoryKinds,
   projectMemoryViewSchema,
   pinInputSchema,
   projectMemorySchema,
@@ -161,11 +162,19 @@ export const rpcContract = defineRpcContract({
     input: z.object({
       query: z.string().trim().max(200).nullable().optional(),
       limit: z.number().int().min(1).max(100).optional(),
+      /** One workspace slug, or null for every workspace the login reaches. */
+      workspace: z.string().min(1).nullable().optional(),
+      /** Memory kinds to include; empty means all five. */
+      kinds: z.array(z.enum(memoryKinds)).max(5).optional(),
+      /** Relative window: the last day, week, or 30 days. */
+      since: z.enum(["1d", "7d", "30d"]).nullable().optional(),
     }),
     output: z.object({
       hits: z.array(panelMemorySchema),
       /** Workspaces whose read failed; the rest of the list still stands. */
       failed: z.array(z.string()),
+      /** Every workspace the login reaches, for the filter. */
+      workspaces: z.array(z.object({ slug: z.string(), name: z.string() })),
     }),
   },
   /** What bb saved, newest first, with the project it was learned in. */
