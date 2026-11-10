@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.2
 
 - The page header's link is **Open in browser**, and the context picker says
   what it does: switching changes the login bb uses, so the inbox, memories,
