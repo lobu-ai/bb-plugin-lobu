@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.1
 
 - The Lobu page's header has a context picker: switch the `lobu` CLI login bb
   uses without leaving the page. A signed-out context starts its browser
