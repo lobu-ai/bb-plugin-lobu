@@ -54,7 +54,8 @@ save to, and how many memories bb has saved there, with a link to them. It lists
   the connections that report an error or a broken status, with **Manage in
   Lobu** for the rest.
 
-The header names the account and the Lobu bb talks to, and **Open in Lobu**
+The header names the account and the Lobu bb talks to, and a **context
+picker** switches the login bb uses without leaving the page. **Open in Lobu**
 opens the personal workspace in your browser. Each section loads on its own,
 so a slow or failing Lobu call leaves the rest of the page usable.
 

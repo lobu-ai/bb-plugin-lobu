@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The Lobu page's header has a context picker: switch the `lobu` CLI login bb
+  uses without leaving the page. A signed-out context starts its browser
+  sign-in and the page switches once it lands.
+
 ## 0.7.0
 
 - A **Lobu** page in bb's sidebar. **Saved from bb** is the default memory

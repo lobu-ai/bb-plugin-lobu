@@ -448,7 +448,40 @@ function ConnectionsSection({ origin, personal }: { origin: string; personal: st
 }
 
 function Page({ status, reload }: { status: SetupStatus; reload: () => Promise<SetupStatus | null> }) {
+  const rpc = useRpc<typeof rpcContract>();
   const [refreshes, setRefreshes] = useState(0);
+  const [waiting, setWaiting] = useState<{ name: string; approvalUrl: string | null } | null>(null);
+  const [switchError, setSwitchError] = useState<string | null>(null);
+
+  // A signed-out context finishes its login in the browser; switch once it lands.
+  useEffect(() => {
+    if (waiting === null) return;
+    const timer = setInterval(() => {
+      void reload().then((next) => {
+        if (next === null || next.login === null) return;
+        if (next.login.context === waiting.name && next.login.problem === null) {
+          setWaiting(null);
+          setRefreshes((n) => n + 1);
+        }
+      });
+    }, 3_000);
+    return () => clearInterval(timer);
+  }, [waiting, reload]);
+
+  const pick = (name: string) => {
+    setSwitchError(null);
+    rpc.call("useLogin", { name }).then(
+      ({ approvalUrl }) => {
+        if (approvalUrl === null) {
+          void reload().then(() => setRefreshes((n) => n + 1));
+        } else {
+          setWaiting({ name, approvalUrl });
+        }
+      },
+      (cause: unknown) => setSwitchError(errorText(cause)),
+    );
+  };
+
   if (!isConnected(status) || status.login === null) {
     return (
       <div className="space-y-3">
@@ -458,12 +491,28 @@ function Page({ status, reload }: { status: SetupStatus; reload: () => Promise<S
   }
   const login = status.login;
   const who = login.account ?? login.context ?? "Connected";
+  const picked = login.context ?? status.contexts.find((context) => context.current)?.name ?? "";
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
           {who} · {host(login.origin)} · {KIND_LABEL[login.kind]}
         </p>
+        {status.contexts.length === 0 ? null : (
+          <select
+            aria-label="Lobu context"
+            className="h-8 max-w-56 cursor-pointer rounded-md border border-input bg-transparent px-2 text-xs"
+            value={picked}
+            onChange={(event) => pick(event.target.value)}
+          >
+            {status.contexts.map((context) => (
+              <option key={context.name} value={context.name}>
+                {context.name} · {host(context.origin)}
+                {context.loggedIn ? "" : " (signed out)"}
+              </option>
+            ))}
+          </select>
+        )}
         <Button
           variant="ghost"
           size="sm"
@@ -482,6 +531,24 @@ function Page({ status, reload }: { status: SetupStatus; reload: () => Promise<S
           Open in Lobu
         </UrlLink>
       </div>
+      {waiting === null ? null : (
+        <p className="rounded-md border border-border px-3 py-2 text-xs text-muted-foreground">
+          Approve the {waiting.name} login in your browser. This page switches once you do.
+          {waiting.approvalUrl === null ? null : (
+            <>
+              {" "}
+              <UrlLink href={waiting.approvalUrl} className="text-foreground underline">
+                Open the approval page
+              </UrlLink>
+            </>
+          )}
+        </p>
+      )}
+      {switchError === null ? null : (
+        <p role="alert" className="text-xs text-destructive">
+          {switchError}
+        </p>
+      )}
       <div key={refreshes} className="space-y-3">
         <InboxSection defaultOpen compact />
         <MemoriesSection />
