@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 - A **Lobu** page in bb's sidebar. **Saved from bb** is the default memory
   view: what agents saved in bb threads, with the project, reuse count, and
