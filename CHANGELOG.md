@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The page header's link is **Open in browser**, and the context picker says
+  what it does: switching changes the login bb uses, so the inbox, memories,
+  connections, and bb's own saves and searches all follow it.
+
 ## 0.7.1
 
 - The Lobu page's header has a context picker: switch the `lobu` CLI login bb

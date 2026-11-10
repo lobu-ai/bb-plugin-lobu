@@ -501,6 +501,7 @@ function Page({ status, reload }: { status: SetupStatus; reload: () => Promise<S
         {status.contexts.length === 0 ? null : (
           <select
             aria-label="Lobu context"
+            title="Switch the Lobu login bb uses. The inbox, memories, connections, and bb's saves all follow it."
             className="h-8 max-w-56 cursor-pointer rounded-md border border-input bg-transparent px-2 text-xs"
             value={picked}
             onChange={(event) => pick(event.target.value)}
@@ -528,7 +529,7 @@ function Page({ status, reload }: { status: SetupStatus; reload: () => Promise<S
           href={login.personal === null ? login.origin : `${login.origin}/${login.personal}`}
           className="text-xs text-muted-foreground underline hover:text-foreground"
         >
-          Open in Lobu
+          Open in browser
         </UrlLink>
       </div>
       {waiting === null ? null : (

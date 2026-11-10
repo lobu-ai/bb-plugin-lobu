@@ -55,9 +55,10 @@ save to, and how many memories bb has saved there, with a link to them. It lists
   Lobu** for the rest.
 
 The header names the account and the Lobu bb talks to, and a **context
-picker** switches the login bb uses without leaving the page. **Open in Lobu**
-opens the personal workspace in your browser. Each section loads on its own,
-so a slow or failing Lobu call leaves the rest of the page usable.
+picker** switches the login bb uses without leaving the page — the inbox,
+memories, connections, and bb's own saves and searches all follow it.
+**Open in browser** opens the personal workspace. Each section loads on its
+own, so a slow or failing Lobu call leaves the rest of the page usable.
 
 ## Memory
 
