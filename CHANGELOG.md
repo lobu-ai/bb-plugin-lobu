@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.3
 
 - **All of Lobu** filters: pick a workspace, memory kinds, and a time window
   (24h, 7 days, or 30 days). Filtered search reads through Lobu's

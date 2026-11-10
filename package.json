@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-lobu",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Lobu in bb: save what your agents learn to Lobu memory and start threads with it, with setup that installs the Lobu CLI and signs you in.",
   "type": "module",
   "license": "Apache-2.0",
