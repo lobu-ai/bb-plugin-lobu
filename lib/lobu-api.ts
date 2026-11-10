@@ -539,6 +539,32 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
       });
     },
 
+    /**
+     * Recent memories in one workspace for the Lobu page. `platforms` filters
+     * connector connections rather than an event's own platform, so this reads
+     * by semantic type and keeps the rows with no connector behind them.
+     */
+    async recentMemories(context: string | null, workspace: string, limit: number): Promise<unknown> {
+      const result = await request(context, `/api/${encodeURIComponent(workspace)}/read_knowledge`, {
+        semantic_type: ["fact", "decision", "preference", "observation", "note"],
+        sort_by: "date",
+        sort_order: "desc",
+        limit,
+        include_total: false,
+      });
+      // read_knowledge leaves platform empty for a workspace save; only
+      // search_memory fills in "lobu". Normalize here so both read the same.
+      const content = (result as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        for (const row of content) {
+          if (typeof row !== "object" || row === null) continue;
+          const item = row as Record<string, unknown>;
+          if (item.platform == null && item.connection_id == null) item.platform = "lobu";
+        }
+      }
+      return result;
+    },
+
     /** Exact event lineages for saved event ids, including supersede and tombstone chains. */
     async readEvents(context: string | null, workspace: string, ids: number[]): Promise<unknown> {
       return request(context, `/api/${encodeURIComponent(workspace)}/read_knowledge`, {

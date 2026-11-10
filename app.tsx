@@ -7,6 +7,7 @@ import {
   useSdk,
 } from "@get-bb/plugin-sdk/app";
 import { LobuHome } from "@/components/home";
+import { LobuPage } from "@/components/lobu-page";
 import { SetupSettings } from "@/components/setup";
 import { ThreadMemoryPanel } from "@/components/memory";
 import { RememberFormView } from "@/components/remember-form";
@@ -31,6 +32,16 @@ async function openReview(threadId: string, text: string) {
 }
 
 export default definePluginApp((app) => {
+  // The Lobu page in the sidebar: what needs you, what agents remember, and
+  // what is paired, all from the login bb uses.
+  app.slots.navPanel({
+    id: "lobu",
+    title: "Lobu",
+    icon: "lobu/lobu",
+    path: "lobu",
+    component: LobuPage,
+  });
+
   // The New thread screen: setup until bb is connected, then what a new
   // thread in the project starts with. Settings: the Lobu account.
   app.slots.homepageSection({ id: "lobu", title: "Lobu", component: LobuHome });

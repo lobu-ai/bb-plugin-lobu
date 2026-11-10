@@ -2,7 +2,7 @@
 // personal workspace, like the Mac app's Inbox section. Open jumps to the
 // notification in Lobu; Mark read clears it here. Quiet when empty or
 // unreachable — the project brief below stays the source of truth.
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { UrlLink, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "@/lib/contract";
 import { Button } from "@/components/ui/button";
@@ -33,7 +33,10 @@ function timeAgo(iso: string): string {
 
 const snippet = (body: string) => body.replace(/\s+/g, " ").trim().slice(0, 200);
 
-export function InboxSection() {
+/** How many rows a compact section shows before "Show all". */
+const COMPACT_ROWS = 5;
+
+export function InboxSection({ defaultOpen = false, compact = false }: { defaultOpen?: boolean; compact?: boolean }) {
   const rpc = useRpc<typeof rpcContract>();
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [unread, setUnread] = useState(0);
@@ -42,7 +45,10 @@ export function InboxSection() {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
+  // A compact section (the Lobu page) keeps the first rows in view and lets
+  // the rest unfold on request instead of pushing everything else down.
+  const [expanded, setExpanded] = useState(false);
   // Nothing is fetched until the user opens the section — the card renders
   // instantly and the inbox populates lazily with a loading row.
   const [loaded, setLoaded] = useState(false);
@@ -76,6 +82,12 @@ export function InboxSection() {
     });
   };
 
+  // A section that starts open (the Lobu page) loads on mount instead of
+  // waiting for a click; the New thread screen keeps loading lazily.
+  useEffect(() => {
+    if (defaultOpen) void load(null, false);
+  }, [defaultOpen, load]);
+
   const markRead = (id: number) => {
     if (workspace === null || busyId !== null) return;
     setBusyId(id);
@@ -96,6 +108,8 @@ export function InboxSection() {
   // the opened section with a retry — the rest of the page is unaffected.
   const empty = loaded && !failed && items.length === 0;
   const heading = !loaded ? "Inbox" : unread > 0 ? `Inbox · ${unread} unread` : "Inbox";
+  const shown = compact && !expanded ? items.slice(0, COMPACT_ROWS) : items;
+  const hidden = items.length - shown.length;
   return (
     <Frame
       header={
@@ -120,43 +134,47 @@ export function InboxSection() {
             <p className="text-xs text-muted-foreground">No notifications. You’re all caught up.</p>
           ) : (
             <>
-              {items.map((item) => (
-          <div key={item.id} className="space-y-0.5">
-            <div className="flex items-baseline gap-2">
-              <p className={cn("min-w-0 flex-1 truncate text-sm", !item.isRead && "font-semibold")}>{item.title}</p>
-              {item.createdAt === "" ? null : (
-                <span className="shrink-0 text-xs text-muted-foreground">{timeAgo(item.createdAt)}</span>
-              )}
-            </div>
-            {item.body === null || item.body.trim() === "" ? null : (
-              <p className="truncate text-xs text-muted-foreground">{snippet(item.body)}</p>
-            )}
-            <div className="flex items-center gap-2">
-              {item.resourceUrl === null ? null : (
-                <UrlLink href={item.resourceUrl} className="text-xs text-foreground underline">
-                  Open
-                </UrlLink>
-              )}
-              {item.isRead ? null : (
-                <Button variant="ghost" size="sm" disabled={busyId !== null} onClick={() => markRead(item.id)}>
-                  {busyId === item.id ? "Marking…" : "Mark read"}
-                </Button>
-              )}
-            </div>
-          </div>
-        ))}
-        <div className="flex items-center gap-2 pt-1">
-          {cursor === null ? null : (
-            <Button variant="outline" size="sm" onClick={() => void load(cursor, true)}>
-              Show more
-            </Button>
-          )}
-          {url === null ? null : (
-            <UrlLink href={url} className="text-xs text-muted-foreground underline">
-              Open all in Lobu
-            </UrlLink>
-          )}
-          </div>
+              {shown.map((item) => (
+                <div key={item.id} className="space-y-0.5">
+                  <div className="flex items-baseline gap-2">
+                    <p className={cn("min-w-0 flex-1 truncate text-sm", !item.isRead && "font-semibold")}>{item.title}</p>
+                    {item.createdAt === "" ? null : (
+                      <span className="shrink-0 text-xs text-muted-foreground">{timeAgo(item.createdAt)}</span>
+                    )}
+                  </div>
+                  {item.body === null || item.body.trim() === "" ? null : (
+                    <p className="truncate text-xs text-muted-foreground">{snippet(item.body)}</p>
+                  )}
+                  <div className="flex items-center gap-2">
+                    {item.resourceUrl === null ? null : (
+                      <UrlLink href={item.resourceUrl} className="text-xs text-foreground underline">
+                        Open
+                      </UrlLink>
+                    )}
+                    {item.isRead ? null : (
+                      <Button variant="ghost" size="sm" disabled={busyId !== null} onClick={() => markRead(item.id)}>
+                        {busyId === item.id ? "Marking…" : "Mark read"}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                {hidden > 0 ? (
+                  <Button variant="outline" size="sm" onClick={() => setExpanded(true)}>
+                    Show all {items.length}
+                  </Button>
+                ) : cursor === null ? null : (
+                  <Button variant="outline" size="sm" onClick={() => void load(cursor, true)}>
+                    Show more
+                  </Button>
+                )}
+                {url === null ? null : (
+                  <UrlLink href={url} className="text-xs text-muted-foreground underline">
+                    Open all in Lobu
+                  </UrlLink>
+                )}
+              </div>
             </>
           )}
         </div>

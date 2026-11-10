@@ -1,9 +1,9 @@
 // Which Lobu workspaces the user's CLI logins reach, and which bb saves the
-// embedded app shows.
+// saved-events link shows.
 import type { LobuApi } from "./lobu-api";
 import type { SavedRecord } from "./memory-contract";
 
-/** At most this many saved memories go into the embedded app's link. */
+/** At most this many saved memories go into the saved-events link. */
 const MAX_SHOWN = 100;
 
 export interface WorkspaceOwner {

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- A **Lobu** page in bb's sidebar. **Saved from bb** is the default memory
+  view: what agents saved in bb threads, with the project, reuse count, and
+  links to the Lobu event and the source thread. **All of Lobu** searches
+  across every workspace the login reaches. The page also shows the inbox and
+  the devices and connections that need attention, and **Open in Lobu** opens
+  the full app in the browser.
+
 ## 0.6.0
 
 - Automatic session entity discovery & graph linking: when memories are saved or

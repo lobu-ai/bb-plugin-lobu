@@ -40,6 +40,24 @@ The same steps live on in Settings → Plugins → Lobu, in a **Lobu account**
 section: which Lobu bb uses, who it is signed in as, the workspace agents
 save to, and how many memories bb has saved there, with a link to them. It lists every CLI context bb knows, like the Mac app's CONTEXT section, so switching is one click. Add a new context with `lobu context add` in a terminal; the plugin picks it up on its next check.
 
+## The Lobu page
+
+**Lobu** in bb's sidebar is a page for the login bb uses:
+
+- **Inbox** — unread Lobu notifications, newest first, with **Open** and
+  **Mark read**. The first five stay in view and **Show all** unfolds the rest.
+- **Memories** — **Saved from bb** (the default) lists what agents saved in
+  bb threads, with the project, how often search has reused it, and links to
+  the Lobu event and the source thread. **All of Lobu** searches the newest
+  memories across every workspace the login reaches.
+- **Devices and connections** — paired devices with their online state, plus
+  the connections that report an error or a broken status, with **Manage in
+  Lobu** for the rest.
+
+The header names the account and the Lobu bb talks to, and **Open in Lobu**
+opens the personal workspace in your browser. Each section loads on its own,
+so a slow or failing Lobu call leaves the rest of the page usable.
+
 ## Memory
 
 Agents in bb forget everything when a thread ends. The plugin keeps the

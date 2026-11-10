@@ -275,13 +275,19 @@ export function briefFor(input: {
  */
 const SAVED_MEMORY_PLATFORM = "lobu";
 
-/** Saved memories among Lobu search results, in the shape the plugin keeps, best first. */
-export function hitsFromSearch(result: unknown, baseUrl: string): MemoryHit[] {
+/**
+ * Saved memories among Lobu search results, in the shape the plugin keeps,
+ * best first. `fallbackWorkspace` covers a per-workspace read whose rows do
+ * not repeat the slug (search results always carry it).
+ */
+export function hitsFromSearch(result: unknown, baseUrl: string, fallbackWorkspace = ""): MemoryHit[] {
   const content = (result as { content?: unknown } | null)?.content;
   if (!Array.isArray(content)) return [];
   return content.flatMap((raw) => {
     const item = raw as Record<string, unknown>;
-    if (typeof item.id !== "number" || typeof item.workspace_slug !== "string") return [];
+    if (typeof item.id !== "number") return [];
+    const workspace = typeof item.workspace_slug === "string" ? item.workspace_slug : fallbackWorkspace;
+    if (workspace === "") return [];
     if (item.platform !== SAVED_MEMORY_PLATFORM) return [];
     const text = typeof item.text_content === "string" ? item.text_content : "";
     const title = typeof item.title === "string" && item.title.trim() !== "" ? item.title : clip(text, 80);
@@ -291,10 +297,10 @@ export function hitsFromSearch(result: unknown, baseUrl: string): MemoryHit[] {
     return [
       {
         eventId: item.id,
-        workspace: item.workspace_slug,
+        workspace,
         title,
         content: text,
-        url: `${baseUrl}/${item.workspace_slug}/events/${item.id}`,
+        url: `${baseUrl}/${workspace}/events/${item.id}`,
         similarity: typeof item.similarity === "number" ? item.similarity : null,
         occurredAt: typeof item.occurred_at === "string" ? item.occurred_at : null,
         ...(entityIds && entityIds.length > 0 ? { entityIds } : {}),

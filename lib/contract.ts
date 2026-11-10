@@ -7,6 +7,7 @@ import {
   pinInputSchema,
   projectMemorySchema,
   rememberResultSchema,
+  savedRecordSchema,
   threadMemorySchema,
 } from "./memory-contract";
 
@@ -53,6 +54,41 @@ const setupStatusSchema = z.object({
 export type SetupStatus = z.infer<typeof setupStatusSchema>;
 
 const approvalSchema = z.object({ approvalUrl: z.string().nullable() });
+
+/** One memory in the Lobu page's list: the newest, or a search match. */
+const panelMemorySchema = z.object({
+  eventId: z.number(),
+  workspace: z.string(),
+  title: z.string(),
+  content: z.string(),
+  url: z.string().nullable(),
+  occurredAt: z.string().nullable(),
+  /** How well it matches the search; null for the newest-first list. */
+  similarity: z.number().nullable(),
+});
+
+/** A paired device as the Lobu page shows it. */
+const panelDeviceSchema = z.object({
+  id: z.string(),
+  label: z.string().nullable(),
+  platform: z.string().nullable(),
+  online: z.boolean(),
+  lastSeenAt: z.string().nullable(),
+});
+
+/** A connection in the login's personal workspace. */
+const panelConnectionSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  connectorName: z.string().nullable(),
+  account: z.string().nullable(),
+  deviceLabel: z.string().nullable(),
+  status: z.string(),
+  errorMessage: z.string().nullable(),
+});
+export type PanelMemory = z.infer<typeof panelMemorySchema>;
+export type PanelDevice = z.infer<typeof panelDeviceSchema>;
+export type PanelConnection = z.infer<typeof panelConnectionSchema>;
 
 export const rpcContract = defineRpcContract({
   /** Whether bb can reach Lobu: the CLI and the login bb uses. */
@@ -115,6 +151,39 @@ export const rpcContract = defineRpcContract({
   markNotificationRead: {
     input: z.object({ notificationId: z.number().int().min(1), workspace: z.string().min(1) }),
     output: z.object({ read: z.boolean() }),
+  },
+  /**
+   * Memories across every workspace the login reaches: the newest first when
+   * there is no query, otherwise the best matches. One workspace failing only
+   * drops its rows.
+   */
+  memories: {
+    input: z.object({
+      query: z.string().trim().max(200).nullable().optional(),
+      limit: z.number().int().min(1).max(100).optional(),
+    }),
+    output: z.object({
+      hits: z.array(panelMemorySchema),
+      /** Workspaces whose read failed; the rest of the list still stands. */
+      failed: z.array(z.string()),
+    }),
+  },
+  /** What bb saved, newest first, with the project it was learned in. */
+  savedMemories: {
+    input: z.object({}),
+    output: z.object({
+      records: z.array(savedRecordSchema.extend({ projectName: z.string().nullable() })),
+    }),
+  },
+  /** Paired devices and the personal workspace's connections, for the Lobu page's status section. */
+  connections: {
+    input: z.object({}),
+    output: z.object({
+      devices: z.array(panelDeviceSchema),
+      connections: z.array(panelConnectionSchema),
+      /** True when Lobu did not answer; the empty lists are not "none". */
+      failed: z.boolean(),
+    }),
   },
   /** Opens the review form in a thread with text the user picked. */
   remember: {
