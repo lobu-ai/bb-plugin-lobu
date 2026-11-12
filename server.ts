@@ -1958,54 +1958,6 @@ export default async function plugin(bb: BbPluginApi) {
     };
   }
 
-  /**
-   * The Lobu page's memory list: the newest memories across every workspace
-   * the login reaches, or the best matches for a query. A workspace that
-   * fails only drops its own rows, so one bad login never blanks the page.
-   */
-  async function panelMemories(
-    query: string | null,
-    limit: number,
-    filter: { workspace: string | null; kinds: string[]; since: string | null },
-  ) {
-    const owners = await memoryOwners();
-    if (owners.size === 0) throw new Error(`No Lobu workspace is available. ${SETUP_HINT}`);
-    const { origin: baseUrl } = await reachLobu();
-    const targets =
-      filter.workspace === null ? [...owners] : [...owners].filter(([slug]) => slug === filter.workspace);
-    if (targets.length === 0) {
-      throw new Error(`The Lobu login bb uses cannot reach the ${filter.workspace} workspace.`);
-    }
-    const pages = await Promise.all(
-      targets.map(async ([slug, owner]) => {
-        const raw = await api
-          .filteredMemories(owner.context, slug, {
-            query,
-            kinds: filter.kinds,
-            since: filter.since,
-            limit: Math.min(limit * 3, 100),
-          })
-          .catch(() => undefined);
-        return { slug, ok: raw !== undefined, hits: raw === undefined ? [] : hitsFromSearch(raw, baseUrl, slug) };
-      }),
-    );
-    const best = new Map<number, MemoryHit>();
-    for (const page of pages) {
-      for (const hit of page.hits) if (!best.has(hit.eventId)) best.set(hit.eventId, hit);
-    }
-    const hits = [...best.values()];
-    if (query === null) {
-      hits.sort((a, b) => (Date.parse(b.occurredAt ?? "") || 0) - (Date.parse(a.occurredAt ?? "") || 0));
-    } else {
-      hits.sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
-    }
-    return {
-      hits: hits.slice(0, limit),
-      failed: pages.filter((page) => !page.ok).map((page) => page.slug),
-      workspaces: [...owners].map(([slug, owner]) => ({ slug, name: owner.name })),
-    };
-  }
-
   // Concurrent card renders share one status computation instead of each
   // re-spawning the CLI; the UI polls this every few seconds while waiting.
   let setupFlight: Promise<SetupStatus> | null = null;
@@ -2176,61 +2128,16 @@ export default async function plugin(bb: BbPluginApi) {
       await api.markNotificationRead(owner.context, workspace, notificationId);
       return { read: true };
     },
-    memories: async ({ query, limit, workspace, kinds, since }) => {
-      const text = query?.trim() ?? "";
-      return panelMemories(text === "" ? null : text, limit ?? 30, {
-        workspace: workspace ?? null,
-        kinds: kinds ?? [],
-        since: since ?? null,
-      });
-    },
-    savedMemories: async () => {
+    savedMemories: async ({ projectId }) => {
       await syncLobuMemories().catch(() => undefined);
       const owners = await memoryOwners();
       const records = memory.saved
-        .filter((record) => record.threadId !== "lobu" && owners.has(record.workspace))
+        .filter((record) => record.projectId === projectId && record.threadId !== "lobu" && owners.has(record.workspace))
         .sort((a, b) => b.savedAt - a.savedAt)
         .slice(0, 50);
       const projectNameOf = (projectId: string | null) => (projectId === null ? null : (projectNames.get(projectId) ?? null));
       const threads = await loadSessionThreads(records.map((record) => record.threadId));
       return { sessions: groupBySession(records, threads, memory.logs, projectNameOf) };
-    },
-    connections: async () => {
-      const owners = await memoryOwners();
-      const personal = personalOf(owners);
-      const context = personal?.owner.context ?? null;
-      let failed = false;
-      const [devices, connections] = await Promise.all([
-        api.listDevices(context).catch(() => {
-          failed = true;
-          return [];
-        }),
-        personal === null
-          ? Promise.resolve([])
-          : api.listConnections(context, personal.slug).catch(() => {
-              failed = true;
-              return [];
-            }),
-      ]);
-      return {
-        devices: devices.map((device) => ({
-          id: device.id,
-          label: device.label,
-          platform: device.platform,
-          online: device.online,
-          lastSeenAt: device.lastSeenAt,
-        })),
-        connections: connections.map((connection) => ({
-          id: connection.id,
-          name: connection.displayName,
-          connectorName: connection.connectorName,
-          account: connection.account,
-          deviceLabel: connection.deviceLabel,
-          status: connection.status,
-          errorMessage: connection.errorMessage,
-        })),
-        failed,
-      };
     },
     remember: async ({ threadId, text }) => {
       // The form stays open until the user answers, so do not hold the RPC.

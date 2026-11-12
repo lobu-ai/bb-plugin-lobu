@@ -11,6 +11,7 @@ import type {
   ProjectMemory,
   ProjectMemoryView,
   SavedRecord,
+  SavedSession,
   ThreadMemory,
 } from "@/lib/memory-contract";
 import { SetupNotice } from "@/components/setup";
@@ -567,6 +568,124 @@ export function ProjectBrief({ projectId }: { projectId: string }) {
         </Button>
       </div>
       {open ? <ProjectContext project={project} workspaces={view.workspaces} onProject={(next) => setView({ ...view, project: next })} /> : null}
+    </section>
+  );
+}
+
+type SessionMemory = SavedSession["records"][number];
+
+function SessionRow({ record }: { record: SessionMemory }) {
+  const title = <span className="font-medium">{record.title}</span>;
+  return (
+    <li className="py-2 text-sm">
+      {record.url === null ? (
+        title
+      ) : (
+        <UrlLink href={record.url} className="hover:underline">
+          {title}
+        </UrlLink>
+      )}
+      {record.content.trim() === "" || record.content === record.title ? null : (
+        <p className="line-clamp-2 text-xs text-muted-foreground">{record.content}</p>
+      )}
+      <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+        <span>{record.kind}</span>
+        <span aria-hidden>·</span>
+        <span>{record.workspace}</span>
+        {record.uses === 0 ? null : (
+          <span className="rounded-full bg-emerald-500/10 px-1.5 text-emerald-700 dark:text-emerald-300">
+            found {formatCount(record.uses)}×
+          </span>
+        )}
+        {record.recap ? <span className="rounded-full bg-muted px-1.5">archive recap</span> : null}
+      </p>
+    </li>
+  );
+}
+
+function sessionName(session: SavedSession): string {
+  if (session.kind === "terminal") return "From the terminal";
+  if (session.kind === "project") return "Notes you added";
+  return session.title ?? "A thread bb no longer has";
+}
+
+/** One session: the thread that learned something, and what it saved. */
+function SessionBlock({ session }: { session: SavedSession }) {
+  const navigate = useBbNavigate();
+  const opensThread = session.kind === "thread" && session.title !== null;
+  const newest = session.records[0]?.savedAt ?? null;
+  const facts = [
+    newest === null ? null : sinceMs(newest),
+    session.startedWith === null ? null : `started with ${formatCount(session.startedWith)}`,
+    session.lookedUp === null ? null : `looked up ${formatCount(session.lookedUp)}`,
+    `saved ${formatCount(session.records.length)}`,
+  ].filter((fact): fact is string => fact !== null);
+  return (
+    <li className="py-3">
+      <div className="flex min-w-0 items-center gap-2">
+        {opensThread ? (
+          <button
+            type="button"
+            className="min-w-0 truncate text-left text-sm font-medium hover:underline"
+            onClick={() => navigate.toThread(session.threadId)}
+          >
+            {sessionName(session)}
+          </button>
+        ) : (
+          <span className="min-w-0 truncate text-sm font-medium">{sessionName(session)}</span>
+        )}
+        {session.archived ? (
+          <span className="shrink-0 rounded-full bg-muted px-1.5 text-xs text-muted-foreground">archived</span>
+        ) : null}
+      </div>
+      <p className="text-xs text-muted-foreground">{facts.join(" · ")}</p>
+      <ul className="mt-1 divide-y divide-border border-l border-border pl-3">
+        {session.records.map((record) => (
+          <SessionRow key={`${record.workspace}-${record.eventId}`} record={record} />
+        ))}
+      </ul>
+    </li>
+  );
+}
+
+/**
+ * The New thread screen's record of what threads in the project taught Lobu:
+ * each session, what it started with and looked up, and what it saved.
+ */
+export function ProjectSessions({ projectId }: { projectId: string }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [sessions, setSessions] = useState<SavedSession[] | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    setSessions(null);
+    rpc.call("savedMemories", { projectId }).then(
+      (page) => setSessions(page.sessions),
+      () => setSessions(null),
+    );
+  }, [rpc, projectId]);
+  if (sessions === null || sessions.length === 0) return null;
+  const memories = sessions.reduce((sum, session) => sum + session.records.length, 0);
+  return (
+    <section className="space-y-1 rounded-lg border border-border px-4 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">
+          {formatCount(memories)} {memories === 1 ? "memory" : "memories"} saved in {formatCount(sessions.length)} recent{" "}
+          {sessions.length === 1 ? "session" : "sessions"}.
+        </p>
+        <Button variant="ghost" size="sm" onClick={() => setOpen((shown) => !shown)}>
+          {open ? "Hide" : "Show"}
+        </Button>
+      </div>
+      {open ? (
+        <div className="space-y-2 pb-2">
+          <ul className="divide-y divide-border">
+            {sessions.map((session) => (
+              <SessionBlock key={session.threadId} session={session} />
+            ))}
+          </ul>
+          <SavedInLobu />
+        </div>
+      ) : null}
     </section>
   );
 }

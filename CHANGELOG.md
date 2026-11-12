@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- The Lobu sidebar page is gone; its parts live where they are used. The New
+  thread screen shows each memory a new thread starts with under the thread
+  that taught it, and the project's recent sessions with what each started
+  with, looked up, and saved. The thread panel groups what a thread started
+  with the same way. Search all of Lobu in Lobu; switch logins in Settings.
+- A failed or slow `lobu` CLI check no longer reads as signed out: the setup
+  card says what failed and checks again until it clears.
+
 ## 0.8.0
 
 - Memories link to entities only on certain evidence. Fuzzy name search over

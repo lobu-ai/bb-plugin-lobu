@@ -1204,49 +1204,7 @@ describe("the memory loop", () => {
     }
   });
 
-  test("the Lobu page lists memories across workspaces, searches them, and shows what is paired", async () => {
-    lobu.memories.push(
-      {
-        id: 9101,
-        workspace: "me",
-        title: "Release ritual",
-        content: "Tag before merging.",
-        kind: "preference",
-        deleted: false,
-        supersededBy: null,
-      },
-      {
-        id: 9102,
-        workspace: "team",
-        title: "Team deploy window",
-        content: "Deploys run from main only.",
-        kind: "decision",
-        deleted: false,
-        supersededBy: null,
-      },
-    );
-    lobu.devices.push({
-      id: "dev-page",
-      worker_id: "w-page",
-      label: "Studio Mac",
-      platform: "darwin",
-      online: false,
-      last_seen_at: "2026-10-04T00:00:00.000Z",
-      capabilities: [],
-    });
-    lobu.connections.push({
-      workspace: "me",
-      organization_id: "me",
-      id: 771,
-      display_name: "Chrome — Studio",
-      connector_key: "chrome",
-      connector_name: "Chrome",
-      auth_profile_name: "someone@example.com",
-      device_label: "Studio Mac",
-      status: "active",
-      error_message: null,
-    });
-
+  test("the New thread screen lists the project's sessions and what each saved", async () => {
     const { rpc, call } = await startPlugin();
     await call(
       "lobu_remember",
@@ -1254,7 +1212,7 @@ describe("the memory loop", () => {
         memories: [
           {
             title: "Panel save",
-            content: "Saved from the page test.",
+            content: "Saved from the sessions test.",
             kind: "note",
             evidence: "Synthetic test memory",
           },
@@ -1263,52 +1221,15 @@ describe("the memory loop", () => {
       "thread-panel",
       "proj-1",
     );
-    const recent = (await rpc.memories!({ query: null, limit: 100 })) as {
-      hits: { eventId: number; workspace: string; url: string }[];
-      failed: string[];
-    };
-    expect(recent.failed).toEqual([]);
-    const mine = recent.hits.filter((hit) => hit.eventId === 9101 || hit.eventId === 9102);
-    expect(mine.map((hit) => hit.workspace).sort()).toEqual(["me", "team"]);
-    expect(mine.find((hit) => hit.eventId === 9102)?.url).toBe(`http://localhost:${server.port}/team/events/9102`);
-
-    const found = (await rpc.memories!({ query: "deploys run", limit: 10 })) as { hits: { eventId: number }[] };
-    expect(found.hits.some((hit) => hit.eventId === 9102)).toBe(true);
-    expect(found.hits.some((hit) => hit.eventId === 9101)).toBe(false);
-
-    const decisions = (await rpc.memories!({ query: null, kinds: ["decision"], limit: 100 })) as {
-      hits: { eventId: number }[];
-    };
-    expect(decisions.hits.some((hit) => hit.eventId === 9102)).toBe(true);
-    expect(decisions.hits.some((hit) => hit.eventId === 9101)).toBe(false);
-
-    const teamOnly = (await rpc.memories!({ query: null, workspace: "team", limit: 100 })) as {
-      hits: { eventId: number; workspace: string }[];
-      workspaces: { slug: string }[];
-    };
-    expect(teamOnly.hits.some((hit) => hit.eventId === 9102)).toBe(true);
-    expect(teamOnly.hits.every((hit) => hit.workspace === "team")).toBe(true);
-    expect(teamOnly.workspaces.map((workspace) => workspace.slug).sort()).toEqual(["me", "team"]);
-
-    const saved = (await rpc.savedMemories!({})) as {
+    type Sessions = {
       sessions: { threadId: string; title: string | null; projectName: string | null; records: { title: string }[] }[];
     };
+    const saved = (await rpc.savedMemories!({ projectId: "proj-1" })) as Sessions;
     const panelSession = saved.sessions.find((session) => session.threadId === "thread-panel");
     expect(panelSession).toMatchObject({ title: "Plan the launch", projectName: "Acme app" });
     expect(panelSession?.records.map((record) => record.title)).toContain("Panel save");
 
-    const paired = (await rpc.connections!({})) as {
-      devices: { id: string; label: string | null; online: boolean }[];
-      connections: { id: number; name: string; connectorName: string | null; account: string | null }[];
-    };
-    expect(paired.devices.find((device) => device.id === "dev-page")).toMatchObject({
-      label: "Studio Mac",
-      online: false,
-    });
-    expect(paired.connections.find((connection) => connection.id === 771)).toMatchObject({
-      name: "Chrome — Studio",
-      connectorName: "Chrome",
-      account: "someone@example.com",
-    });
+    const elsewhere = (await rpc.savedMemories!({ projectId: "proj-other" })) as Sessions;
+    expect(elsewhere.sessions).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 // The New thread screen's Lobu section: the setup card until bb is connected,
 // then the inbox and what a new thread in the project picked in the composer starts with.
 import { useComposers } from "@get-bb/plugin-sdk/app";
-import { ProjectBrief } from "@/components/memory";
+import { ProjectBrief, ProjectSessions } from "@/components/memory";
 import { InboxSection } from "@/components/inbox";
 import { isConnected, SetupCard, useSetupStatus } from "@/components/setup";
 
@@ -25,6 +25,7 @@ export function LobuHome() {
       {isConnected(status) ? null : <SetupCard status={status} reload={reload} />}
       {isConnected(status) ? <InboxSection /> : null}
       {projectId === null ? null : <ProjectBrief projectId={projectId} />}
+      {projectId === null || !isConnected(status) ? null : <ProjectSessions projectId={projectId} />}
     </div>
   );
 }
