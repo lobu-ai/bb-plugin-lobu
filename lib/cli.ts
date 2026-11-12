@@ -93,6 +93,17 @@ function lastLine(text: unknown): string {
   return typeof text === "string" ? (text.trim().split("\n").pop()?.trim() ?? "") : "";
 }
 
+/** All of a failed run's error output on one line, capped: `env` names the missing program first and adds hints after it. */
+function errorOutput(text: unknown): string {
+  if (typeof text !== "string") return "";
+  const joined = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "")
+    .join(" ");
+  return joined.length > 300 ? `${joined.slice(0, 299)}…` : joined;
+}
+
 /**
  * Turns a failed CLI run into setup steps from its exit status: a missing
  * binary, a CLI that could not run (126/127 from the shell or `env`, a signal,
@@ -107,7 +118,7 @@ export function cliFailure(error: unknown, context: string | null): LobuSetupErr
   }
   const detail = failure.killed
     ? `it did not answer within ${CLI_TIMEOUT_MS / 1000} seconds`
-    : lastLine(failure.stderr) || `it exited with ${String(failure.signal ?? failure.code)}`;
+    : errorOutput(failure.stderr) || `it exited with ${String(failure.signal ?? failure.code)}`;
   return new LobuSetupError("cli_failed", context, `bb could not run the lobu CLI: ${detail}`);
 }
 
