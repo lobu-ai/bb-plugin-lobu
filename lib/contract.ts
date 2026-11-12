@@ -8,7 +8,7 @@ import {
   pinInputSchema,
   projectMemorySchema,
   rememberResultSchema,
-  savedRecordSchema,
+  savedSessionSchema,
   threadMemorySchema,
 } from "./memory-contract";
 
@@ -177,12 +177,10 @@ export const rpcContract = defineRpcContract({
       workspaces: z.array(z.object({ slug: z.string(), name: z.string() })),
     }),
   },
-  /** What bb saved, newest first, with the project it was learned in. */
+  /** What bb saved, grouped by the session that saved it, newest session first. */
   savedMemories: {
     input: z.object({}),
-    output: z.object({
-      records: z.array(savedRecordSchema.extend({ projectName: z.string().nullable() })),
-    }),
+    output: z.object({ sessions: z.array(savedSessionSchema) }),
   },
   /** Paired devices and the personal workspace's connections, for the Lobu page's status section. */
   connections: {

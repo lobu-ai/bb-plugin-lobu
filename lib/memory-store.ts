@@ -11,6 +11,7 @@ import {
   pinnedMemorySchema,
   type SavedRecord,
   savedRecordSchema,
+  type SavedSession,
   type ThreadLog,
   threadLogSchema,
 } from "./memory-contract";
@@ -205,6 +206,49 @@ function line(title: string, content: string, eventId: number | null): string {
   const idTag = eventId === null ? "" : ` (memory ${eventId})`;
   const body = clip(content, ITEM_CHARS);
   return body === "" || body === title ? `- ${clip(title, ITEM_CHARS)}${idTag}` : `- ${clip(title, 120)}${idTag}: ${body}`;
+}
+
+/** What bb knows about a thread when grouping its saves. */
+export interface SessionThread {
+  title: string | null;
+  projectName: string | null;
+  archivedAt: number | null;
+}
+
+/**
+ * Groups saved records, newest first, by the session that saved them. A save
+ * made after its thread was archived came from the archive recap. `threads`
+ * has no entry for a thread bb no longer has.
+ */
+export function groupBySession(
+  records: SavedRecord[],
+  threads: ReadonlyMap<string, SessionThread>,
+  logs: Record<string, ThreadLog>,
+  projectNameOf: (projectId: string | null) => string | null,
+): SavedSession[] {
+  const sessions = new Map<string, SavedSession>();
+  for (const record of records) {
+    const thread = threads.get(record.threadId) ?? null;
+    let session = sessions.get(record.threadId);
+    if (session === undefined) {
+      const log = logs[record.threadId];
+      const kind = record.threadId === "cli" ? "terminal" : record.threadId.startsWith("project:") ? "project" : "thread";
+      session = {
+        threadId: record.threadId,
+        kind,
+        title: thread?.title ?? null,
+        projectName: thread?.projectName ?? projectNameOf(record.projectId),
+        archived: thread !== null && thread.archivedAt !== null,
+        startedWith: log === undefined ? null : log.given.length,
+        lookedUp: log === undefined ? null : log.searches.length,
+        records: [],
+      };
+      sessions.set(record.threadId, session);
+    }
+    const archivedAt = thread?.archivedAt ?? null;
+    session.records.push({ ...record, recap: archivedAt !== null && record.savedAt >= archivedAt });
+  }
+  return [...sessions.values()];
 }
 
 export interface Brief {

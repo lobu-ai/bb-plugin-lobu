@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { UrlLink, useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
 import type { PanelConnection, PanelDevice, PanelMemory, rpcContract, SetupStatus } from "@/lib/contract";
-import { memoryKinds, type MemoryKind, type SavedRecord } from "@/lib/memory-contract";
+import { memoryKinds, type MemoryKind, type SavedSession } from "@/lib/memory-contract";
 import { InboxSection } from "@/components/inbox";
 import { isConnected, SetupCard, useSetupStatus } from "@/components/setup";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ const SEARCH_DEBOUNCE_MS = 300;
 /** How many memories the page shows: the newest, or the best matches. */
 const MEMORY_LIMIT = 30;
 
-type SavedPanelMemory = SavedRecord & { projectName: string | null };
+type SavedPanelMemory = SavedSession["records"][number];
 
 const host = (origin: string) => origin.replace(/^https?:\/\//, "");
 const KIND_LABEL: Record<SetupStatus["contexts"][number]["kind"], string> = {
@@ -86,7 +86,6 @@ function MemoryRow({ hit }: { hit: PanelMemory }) {
 }
 
 function SavedRow({ record }: { record: SavedPanelMemory }) {
-  const navigate = useBbNavigate();
   const title = <span className="font-medium">{record.title}</span>;
   return (
     <li className="py-2.5 text-sm">
@@ -101,13 +100,9 @@ function SavedRow({ record }: { record: SavedPanelMemory }) {
         <p className="line-clamp-2 text-xs text-muted-foreground">{record.content}</p>
       )}
       <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+        <span>{record.kind}</span>
+        <span aria-hidden>·</span>
         <span>{record.workspace}</span>
-        {record.projectName === null ? null : (
-          <>
-            <span aria-hidden>·</span>
-            <span>{record.projectName}</span>
-          </>
-        )}
         <span aria-hidden>·</span>
         <span>{sinceMs(record.savedAt)}</span>
         {record.uses === 0 ? null : (
@@ -115,14 +110,63 @@ function SavedRow({ record }: { record: SavedPanelMemory }) {
             found {formatCount(record.uses)}×
           </span>
         )}
-        {record.threadId === "" || record.threadId === "lobu" ? null : (
-          <button type="button" className="underline hover:text-foreground" onClick={() => navigate.toThread(record.threadId)}>
-            Thread
-          </button>
-        )}
+        {record.recap ? <span className="rounded-full bg-muted px-1.5">archive recap</span> : null}
       </p>
     </li>
   );
+}
+
+function sessionName(session: SavedSession): string {
+  if (session.kind === "terminal") return "From the terminal";
+  if (session.kind === "project") return `Notes for ${session.projectName ?? "a project"}`;
+  return session.title ?? "A thread bb no longer has";
+}
+
+/** One session: the thread that learned something, and what it saved. */
+function SessionBlock({ session }: { session: SavedSession }) {
+  const navigate = useBbNavigate();
+  const name = sessionName(session);
+  const opensThread = session.kind === "thread" && session.title !== null;
+  const newest = session.records[0]?.savedAt ?? null;
+  const facts = [
+    session.kind === "project" ? null : session.projectName,
+    newest === null ? null : sinceMs(newest),
+    session.startedWith === null ? null : `started with ${formatCount(session.startedWith)}`,
+    session.lookedUp === null ? null : `looked up ${formatCount(session.lookedUp)}`,
+    `saved ${formatCount(session.records.length)}`,
+  ].filter((fact): fact is string => fact !== null);
+  return (
+    <li className="py-3">
+      <div className="flex min-w-0 items-center gap-2">
+        {opensThread ? (
+          <button
+            type="button"
+            className="min-w-0 truncate text-left text-sm font-medium hover:underline"
+            onClick={() => navigate.toThread(session.threadId)}
+          >
+            {name}
+          </button>
+        ) : (
+          <span className="min-w-0 truncate text-sm font-medium">{name}</span>
+        )}
+        {session.archived ? (
+          <span className="shrink-0 rounded-full bg-muted px-1.5 text-xs text-muted-foreground">archived</span>
+        ) : null}
+      </div>
+      <p className="text-xs text-muted-foreground">{facts.join(" · ")}</p>
+      <ul className="mt-1 divide-y divide-border border-l border-border pl-3">
+        {session.records.map((record) => (
+          <SavedRow key={`${record.workspace}-${record.eventId}`} record={record} />
+        ))}
+      </ul>
+    </li>
+  );
+}
+
+function savedSummary(sessions: SavedSession[]): string {
+  const memories = sessions.reduce((sum, session) => sum + session.records.length, 0);
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  return `${plural(memories, "memory", "memories")} from ${plural(sessions.length, "session", "sessions")}`;
 }
 
 /** The memory loop made visible: what bb saved, or everything Lobu holds. */
@@ -130,7 +174,7 @@ function MemoriesSection() {
   const rpc = useRpc<typeof rpcContract>();
   const [view, setView] = useState<"saved" | "all">("saved");
   // "Saved from bb" reads the plugin's own records.
-  const [saved, setSaved] = useState<SavedPanelMemory[] | null>(null);
+  const [saved, setSaved] = useState<SavedSession[] | null>(null);
   const [savedError, setSavedError] = useState<string | null>(null);
   const [savedLoading, setSavedLoading] = useState(false);
   const [savedRefreshes, setSavedRefreshes] = useState(0);
@@ -158,7 +202,7 @@ function MemoriesSection() {
       .then(
         (page) => {
           if (!live) return;
-          setSaved(page.records);
+          setSaved(page.sessions);
           setSavedError(null);
         },
         (cause: unknown) => {
@@ -247,7 +291,7 @@ function MemoriesSection() {
         <>
           <div className="flex items-center gap-2 py-2">
             <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-              {saved === null ? " " : `${saved.length} ${saved.length === 1 ? "memory" : "memories"} from bb threads`}
+              {saved === null ? " " : savedSummary(saved)}
             </p>
             <Button
               variant="ghost"
@@ -269,8 +313,8 @@ function MemoriesSection() {
             </p>
           ) : (
             <ul className="divide-y divide-border">
-              {saved.map((record) => (
-                <SavedRow key={`${record.workspace}-${record.eventId}`} record={record} />
+              {saved.map((session) => (
+                <SessionBlock key={session.threadId} session={session} />
               ))}
             </ul>
           )}

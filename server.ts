@@ -44,7 +44,9 @@ import {
   countUses,
   entitiesFromSearch,
   hitsFromSearch,
+  groupBySession,
   learnedFor,
+  type SessionThread,
   LINKS_KEY,
   parseLinks,
   parseProjectPins,
@@ -2122,16 +2124,28 @@ export default async function plugin(bb: BbPluginApi) {
     savedMemories: async () => {
       await syncLobuMemories().catch(() => undefined);
       const owners = await memoryOwners();
-      return {
-        records: memory.saved
-          .filter((record) => record.threadId !== "lobu" && owners.has(record.workspace))
-          .sort((a, b) => b.savedAt - a.savedAt)
-          .slice(0, 50)
-          .map((record) => ({
-            ...record,
-            projectName: record.projectId === null ? null : (projectNames.get(record.projectId) ?? null),
-          })),
-      };
+      const records = memory.saved
+        .filter((record) => record.threadId !== "lobu" && owners.has(record.workspace))
+        .sort((a, b) => b.savedAt - a.savedAt)
+        .slice(0, 50);
+      const projectNameOf = (projectId: string | null) => (projectId === null ? null : (projectNames.get(projectId) ?? null));
+      const threadIds = [...new Set(records.map((record) => record.threadId))].filter(
+        (id) => id !== "cli" && !id.startsWith("project:"),
+      );
+      const threads = new Map<string, SessionThread>();
+      await Promise.all(
+        threadIds.map(async (threadId) => {
+          // A deleted thread has no title to show; its saves still group under its id.
+          const thread = await bb.sdk.threads.get({ threadId }).catch(() => null);
+          if (thread === null || thread.deletedAt !== null) return;
+          threads.set(threadId, {
+            title: thread.title ?? thread.titleFallback,
+            projectName: projectNameOf(thread.projectId ?? null),
+            archivedAt: thread.archivedAt,
+          });
+        }),
+      );
+      return { sessions: groupBySession(records, threads, memory.logs, projectNameOf) };
     },
     connections: async () => {
       const owners = await memoryOwners();

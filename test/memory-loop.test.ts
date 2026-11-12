@@ -417,7 +417,7 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
     sdk: {
       projects: { list: async () => [{ id: "proj-1", name: "Acme app", gitRemoteUrl: "https://github.com/acme/acme-app.git" }] },
       threads: {
-        get: async () => ({ projectId: "proj-1" }),
+        get: async () => ({ projectId: "proj-1", title: "Plan the launch", titleFallback: null, archivedAt: null, deletedAt: null }),
         list: async () => [],
         getPluginMetadata: async () => ({}),
       },
@@ -1273,12 +1273,11 @@ describe("the memory loop", () => {
     expect(teamOnly.workspaces.map((workspace) => workspace.slug).sort()).toEqual(["me", "team"]);
 
     const saved = (await rpc.savedMemories!({})) as {
-      records: { title: string; projectName: string | null; threadId: string }[];
+      sessions: { threadId: string; title: string | null; projectName: string | null; records: { title: string }[] }[];
     };
-    expect(saved.records.find((record) => record.title === "Panel save")).toMatchObject({
-      projectName: "Acme app",
-      threadId: "thread-panel",
-    });
+    const panelSession = saved.sessions.find((session) => session.threadId === "thread-panel");
+    expect(panelSession).toMatchObject({ title: "Plan the launch", projectName: "Acme app" });
+    expect(panelSession?.records.map((record) => record.title)).toContain("Panel save");
 
     const paired = (await rpc.connections!({})) as {
       devices: { id: string; label: string | null; online: boolean }[];

@@ -77,6 +77,30 @@ export const savedRecordSchema = z.object({
 });
 export type SavedRecord = z.infer<typeof savedRecordSchema>;
 
+/** One bb session's saves for the Lobu page: the thread, what it started with, what it saved. */
+export const savedSessionSchema = z.object({
+  /** A bb thread id, "cli" for `bb lobu remember` in a terminal, or "project:<id>" for a project note. */
+  threadId: z.string(),
+  kind: z.enum(["thread", "terminal", "project"]),
+  /** The thread's title; null when bb no longer has the thread. */
+  title: z.string().nullable(),
+  projectName: z.string().nullable(),
+  archived: z.boolean(),
+  /**
+   * Memories the thread's brief gave it, and lobu_search calls it made. Null
+   * when bb no longer keeps the thread's log (old logs are trimmed to fit kv).
+   */
+  startedWith: z.number().nullable(),
+  lookedUp: z.number().nullable(),
+  records: z.array(
+    savedRecordSchema.extend({
+      /** Saved by the archive recap, after the thread was archived. */
+      recap: z.boolean(),
+    }),
+  ),
+});
+export type SavedSession = z.infer<typeof savedSessionSchema>;
+
 /** A Lobu memory or note the user pinned to a bb project; every thread there starts with it. */
 export const pinnedMemorySchema = z.object({
   eventId: z.number().nullable(),
