@@ -60,14 +60,14 @@ describe("transcriptFromEvents", () => {
 
 describe("recapPrompt", () => {
   test("fences the conversation as data", () => {
-    const prompt = recapPrompt('Fix "deploys"', "User: hi");
+    const prompt = recapPrompt('Fix "deploys"', "User: hi", null);
     expect(prompt).toContain('"Fix \\"deploys\\""');
     expect(prompt).toContain("<<<CONVERSATION\nUser: hi\nCONVERSATION>>>");
     expect(prompt).toContain("lobu_remember");
   });
 
   test("expects nothing to keep and caps proposals at three", () => {
-    const prompt = recapPrompt("Anything", "User: hi");
+    const prompt = recapPrompt("Anything", "User: hi", null);
     expect(prompt).toContain('"Nothing to keep."');
     expect(prompt).toContain("at most three");
   });

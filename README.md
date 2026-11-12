@@ -83,15 +83,19 @@ It works as a loop:
 - **Agents search before they work.** A `lobu_search` tool (and `bb lobu search`
   CLI command for ACP providers that do not expose plugin tools) searches your
   personal workspace and the Lobu workspace you linked to the project, returning
-  saved memories and any matching entities with their IDs. Only
+  saved memories and the entities the query names, with their IDs. Only
   saved memories come back, not browser history or other connector content.
 - **Agents save and supersede what they learn.** A `lobu_remember` tool (and
   `bb lobu remember` CLI command) saves decisions, non-obvious facts, and
   standing preferences, at most three at a time and each with an evidence
-  quote. The plugin automatically inspects the session's conversation transcription
-  and open desktop browser tabs to discover, link, or auto-create relevant Lobu entities
-  (projects, repositories, documentation, services), linking them directly to the
-  saved events in Lobu's graph. Passing `replacesEventId` (`--replaces-id`) supersedes an outdated
+  quote. Each memory is linked to Lobu entities only on certain evidence: the
+  full names the agent lists in `mentions` (`--mentions`) when exactly one record
+  in the destination workspace has that name (Lobu's exact search), and explicit
+  `entityIds` that are records there. The project's repository is one such
+  mention, listed only when the memory is about that codebase or product.
+  One-word names, shared names, and member records are never linked, and the
+  agent is told which mentions stayed unlinked and why. The plugin never
+  creates entities. Passing `replacesEventId` (`--replaces-id`) supersedes an outdated
   memory instead of leaving both active. With **Save memories automatically**
   on (the default), saves go straight to your personal workspace, and anything
   Lobu already holds is skipped. With it off, a review form opens first.

@@ -2,11 +2,12 @@
 // plugin server process and are never sent to the page.
 import { z } from "zod";
 import { cliFailure, createCliRunner, LobuSetupError } from "./cli";
-import type { EntityHit } from "./memory-contract";
 
 /** How long a `lobu whoami` session is reused before asking the CLI again. */
 const SESSION_TTL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+/** Exact-name hits read per mention: enough to see a second record with the same name. */
+const EXACT_NAME_LIMIT = 5;
 /** The semantic types save_memory writes; read_knowledge filters by these. */
 const MEMORY_KINDS = ["fact", "decision", "preference", "observation", "note"] as const;
 /** A new Lobu on this machine loads its search model on the first search, which takes longer. */
@@ -450,83 +451,21 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
       });
     },
 
-    /** Available entity type slugs in one workspace (from manage_entity_schema). */
-    async listEntityTypes(context: string | null, workspace: string): Promise<string[]> {
-      try {
-        const result = (await request(context, `/api/${encodeURIComponent(workspace)}/manage_entity_schema`, {
-          schema_type: "entity_type",
-          action: "list",
-        })) as { entity_types?: { slug?: string }[] };
-        if (Array.isArray(result.entity_types)) {
-          return result.entity_types
-            .map((t) => t.slug)
-            .filter((slug): slug is string => typeof slug === "string" && slug.length > 0);
-        }
-      } catch {
-        // manage_entity_schema not supported or unauthorized
-      }
-      return [];
-    },
-
-    /** Lists entities in one workspace using manage_entity (with optional search filter). */
-    async listEntities(
-      context: string | null,
-      workspace: string,
-      options: { search?: string; entity_type?: string; limit?: number } = {},
-    ): Promise<EntityHit[]> {
-      try {
-        const result = (await request(context, `/api/${encodeURIComponent(workspace)}/manage_entity`, {
-          action: "list",
-          ...options,
-        })) as { entities?: { id: number; name: string; slug?: string; entity_type?: string; type?: string; workspace_slug?: string }[] };
-        if (Array.isArray(result.entities)) {
-          return result.entities
-            .filter((e) => typeof e.id === "number" && typeof e.name === "string")
-            .map((e) => ({
-              id: e.id,
-              name: e.name,
-              slug: e.slug ?? e.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-              type: e.entity_type ?? e.type ?? options.entity_type ?? "entity",
-              workspace: e.workspace_slug ?? workspace,
-              url: null,
-            }));
-        }
-      } catch {
-        // manage_entity list error
-      }
-      return [];
-    },
-
-    /** Creates an entity in one workspace; returns the created entity details. */
-    async createEntity(
-      context: string | null,
-      workspace: string,
-      input: { entity_type: string; name: string; slug?: string; content?: string; metadata?: Record<string, unknown> },
-    ): Promise<EntityHit> {
-      const sanitizedSlug = input.slug
-        ? input.slug
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/^-+|-+$/g, "")
-            .slice(0, 50)
-        : undefined;
-      const result = (await request(context, `/api/${encodeURIComponent(workspace)}/manage_entity`, {
-        action: "create",
-        ...input,
-        ...(sanitizedSlug ? { slug: sanitizedSlug } : {}),
-      })) as { entity?: { id: number; name: string; slug: string; entity_type?: string; type?: string; workspace_slug?: string }; error?: string };
-      if (!result.entity || typeof result.entity.id !== "number") {
-        throw new Error(result.error ?? "Failed to create entity");
-      }
-      const e = result.entity;
-      return {
-        id: e.id,
-        name: e.name,
-        slug: e.slug,
-        type: e.entity_type ?? e.type ?? input.entity_type,
-        workspace: e.workspace_slug ?? workspace,
-        url: null,
-      };
+    /**
+     * Entities in one workspace whose name, or an identifier, is exactly `name`
+     * (case-insensitive): Lobu's search_memory with fuzzy off. Older Lobu servers
+     * fall back to partial names when nothing matches exactly, so callers still
+     * compare each hit's name.
+     */
+    async findEntitiesNamed(context: string | null, workspace: string, name: string): Promise<unknown> {
+      return request(context, `/api/${encodeURIComponent(workspace)}/search_memory`, {
+        query: name,
+        fuzzy: false,
+        limit: EXACT_NAME_LIMIT,
+        include_content: false,
+        include_connections: false,
+        include_public_catalogs: false,
+      });
     },
 
     /** Recent current saved memories (platform=lobu) in one workspace, newest first. */

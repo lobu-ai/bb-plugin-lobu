@@ -18,6 +18,8 @@ export const memoryDraftSchema = z.object({
   replacesEventId: z.number().int().positive().nullish(),
   /** Lobu entity IDs to link this memory with (e.g. projects, people, repositories). */
   entityIds: z.array(z.number().int().positive()).nullish(),
+  /** Full names of the specific records this memory is about; each links only on a unique exact match. */
+  mentions: z.array(z.string().trim().min(2).max(120)).max(5).nullish(),
 });
 export type MemoryDraft = z.infer<typeof memoryDraftSchema>;
 
