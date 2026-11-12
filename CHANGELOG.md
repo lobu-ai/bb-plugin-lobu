@@ -1,16 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.8.0
 
 - Memories link to entities only on certain evidence. Fuzzy name search over
   transcript turns, tab titles, and memory text linked memories to unrelated
   people ("Hand off" to Hande, Handy, and Handel), and the same links went on
-  every memory saved together. Now a memory links only to `mentions` that
-  exactly one record in its workspace is named (Lobu's exact search), and to
-  explicit `entityIds` that exist there. The project's repository is no longer
-  linked to every memory: the agent mentions it only for a memory about that
-  codebase or product. The plugin no longer creates entities from tabs or
-  transcripts, and `lobu_search` lists only entities the query names.
+  every memory saved together. Now the agent lists the full names a memory is
+  about in `mentions`, and Lobu links each one when the memory is saved, only
+  if exactly one record in the workspace has that exact name. The agent is told
+  which names stayed unlinked and why. Explicit `entityIds` still link when
+  they are records there. The project's repository is linked only to memories
+  about that codebase or product, the plugin no longer creates entities from
+  tabs or transcripts, and `lobu_search` lists only entities the query names.
+  Needs a Lobu server whose `save_memory` accepts names in `entity_ids`.
+- A rule the user states is saved as such: agents no longer hold it back to
+  ask for proof or to confirm the people in it.
+- When the `lobu` CLI cannot start, the setup message shows its whole error
+  output, so a missing interpreter is named instead of a trailing hint.
 
 ## 0.7.3
 
