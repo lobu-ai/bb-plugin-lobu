@@ -13,6 +13,7 @@ import type { ChildProcess } from "node:child_process";
 import { createLobuApi, kindOfOrigin, lobuOrigin, pickCloudContext, pickOriginContext, type AutomationItem, type CliContext, type ConnectionItem, type DeviceItem, type FeedItem, type TabItem } from "./lib/lobu-api";
 import { hasProject, isServing, lastLogLine, LOCAL_CONTEXT, localFolders, localPort, macAppOwnsLocal, startLocal } from "./lib/local";
 import {
+  type BriefItem,
   type EntityHit,
   type MemoryDraft,
   type MemoryHit,
@@ -611,28 +612,33 @@ export default async function plugin(bb: BbPluginApi) {
 
   function projectView(projectId: string): ProjectMemory {
     const { name, workspace, pins, brief } = projectState(projectId);
-    const learned = (brief?.given ?? []).flatMap(({ eventId, workspace: slug, title, source }) => {
-      if (source !== "learned") return [];
-      const record = eventId === null ? undefined : memory.saved.find((saved) => saved.eventId === eventId && saved.workspace === slug);
-      const threadId = record === undefined || record.threadId === "lobu" ? null : record.threadId;
-      return [
-        {
-          eventId,
-          workspace: slug,
-          title,
-          content: record?.content ?? "",
-          url: record?.url ?? null,
-          threadId,
-          threadTitle: threadId === null ? null : (sessionThreads.get(threadId)?.title ?? null),
-        },
-      ];
-    });
+    const learned = (brief?.given ?? []).flatMap((item) => (item.source === "learned" ? [briefItem(item)] : []));
     return { id: projectId, name, workspace, pins, learned };
+  }
+
+  /** A memory a brief gave, with its text, link, and the thread that saved it, from what bb saved. */
+  function briefItem({ eventId, workspace: slug, title }: { eventId: number | null; workspace: string; title: string }): BriefItem {
+    const record = eventId === null ? undefined : memory.saved.find((saved) => saved.eventId === eventId && saved.workspace === slug);
+    const threadId = record === undefined || record.threadId === "lobu" ? null : record.threadId;
+    return {
+      eventId,
+      workspace: slug,
+      title,
+      content: record?.content ?? "",
+      url: record?.url ?? null,
+      threadId,
+      threadTitle: threadId === null ? null : (sessionThreads.get(threadId)?.title ?? null),
+    };
+  }
+
+  /** The threads that saved these memories, looked up so their titles show. */
+  async function loadBriefThreads(items: { eventId: number | null; workspace: string; title: string }[]): Promise<void> {
+    await loadSessionThreads(items.flatMap((item) => briefItem(item).threadId ?? []));
   }
 
   /** projectView, after looking up the threads its learned memories came from. */
   async function projectViewWithThreads(projectId: string): Promise<ProjectMemory> {
-    await loadSessionThreads(projectView(projectId).learned.flatMap((item) => (item.threadId === null ? [] : [item.threadId])));
+    await loadBriefThreads(projectView(projectId).learned);
     return projectView(projectId);
   }
 
@@ -2256,10 +2262,14 @@ export default async function plugin(bb: BbPluginApi) {
       if (projectId !== null && !projectNames.has(projectId)) await refreshProjects().catch(() => undefined);
       await syncLobuMemories();
       void mentionLists().catch(() => undefined);
+      const log = memory.logs[threadId] ?? null;
+      const given = log?.given ?? [];
+      await loadBriefThreads(given);
       return {
         ...(await workspaceOptions()),
         project: projectId === null ? null : projectView(projectId),
-        log: memory.logs[threadId] ?? null,
+        log,
+        startedWith: given.map((item) => ({ ...briefItem(item), source: item.source })),
         saved: memory.saved.filter((record) => record.threadId === threadId),
       };
     },

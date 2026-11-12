@@ -155,24 +155,26 @@ export type ThreadLog = z.infer<typeof threadLogSchema>;
 const workspaceOptionSchema = z.object({ slug: z.string(), name: z.string() });
 
 /** A bb project with its Lobu link, pins, and what its new threads start with. */
+/** A memory as a brief gives it: its text, its Lobu link, and the bb thread that saved it. */
+export const briefItemSchema = z.object({
+  eventId: z.number().nullable(),
+  workspace: z.string(),
+  title: z.string(),
+  content: z.string(),
+  url: z.string().nullable(),
+  /** The bb thread that saved it, and that thread's title; null when bb did not save it or no longer has the thread. */
+  threadId: z.string().nullable(),
+  threadTitle: z.string().nullable(),
+});
+export type BriefItem = z.infer<typeof briefItemSchema>;
+
 export const projectMemorySchema = z.object({
   id: z.string(),
   name: z.string(),
   workspace: z.string().nullable(),
   pins: z.array(pinnedMemorySchema),
   /** The learned memories a new thread here receives after the pins, in brief order. */
-  learned: z.array(
-    z.object({
-      eventId: z.number().nullable(),
-      workspace: z.string(),
-      title: z.string(),
-      content: z.string(),
-      url: z.string().nullable(),
-      /** The bb thread that saved it, and that thread's title; null when bb did not save it or no longer has the thread. */
-      threadId: z.string().nullable(),
-      threadTitle: z.string().nullable(),
-    }),
-  ),
+  learned: z.array(briefItemSchema),
 });
 export type ProjectMemory = z.infer<typeof projectMemorySchema>;
 
@@ -181,6 +183,8 @@ export const threadMemorySchema = z.object({
   workspaces: z.array(workspaceOptionSchema),
   project: projectMemorySchema.nullable(),
   log: threadLogSchema.nullable(),
+  /** The thread's brief as it was given, with where each memory came from. */
+  startedWith: z.array(briefItemSchema.extend({ source: z.enum(["pinned", "learned"]) })),
   saved: z.array(savedRecordSchema),
 });
 export type ThreadMemory = z.infer<typeof threadMemorySchema>;

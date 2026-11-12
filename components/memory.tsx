@@ -352,6 +352,67 @@ function learnedBySession(items: LearnedItem[]) {
   return [...groups.values()];
 }
 
+/**
+ * Learned memories under the thread that taught them: the thread title opens
+ * it in bb, the memory title opens it in Lobu, with a short excerpt.
+ */
+function LearnedGroups({
+  items,
+  action,
+  dimmed,
+}: {
+  items: LearnedItem[];
+  action?: (item: LearnedItem) => ReactNode;
+  dimmed?: (item: LearnedItem) => boolean;
+}) {
+  const navigate = useBbNavigate();
+  return (
+    <>
+      {learnedBySession(items).map((group) => (
+        <li key={group.threadId ?? "unknown"} className="py-2">
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Icon name="lobu/memory" className="size-3.5 shrink-0" />
+            <span>Learned in</span>
+            {group.threadId !== null && group.threadTitle !== null ? (
+              <button
+                type="button"
+                className="min-w-0 truncate font-medium text-foreground hover:underline"
+                onClick={() => navigate.toThread(group.threadId as string)}
+              >
+                {group.threadTitle}
+              </button>
+            ) : (
+              <span>an earlier thread</span>
+            )}
+          </p>
+          <ul className="mt-1 border-l border-border pl-3">
+            {group.items.map((item) => (
+              <li
+                key={`${item.workspace}-${item.eventId ?? item.title}`}
+                className={cn("group flex items-start gap-2 py-1.5 text-sm", dimmed?.(item) && "opacity-50")}
+              >
+                <div className="min-w-0 flex-1">
+                  {item.url === null ? (
+                    <span>{item.title}</span>
+                  ) : (
+                    <UrlLink href={item.url} className="hover:underline">
+                      {item.title}
+                    </UrlLink>
+                  )}
+                  {item.content.trim() === "" || item.content === item.title ? null : (
+                    <p className="line-clamp-2 text-xs text-muted-foreground">{item.content}</p>
+                  )}
+                </div>
+                {action?.(item) ?? null}
+              </li>
+            ))}
+          </ul>
+        </li>
+      ))}
+    </>
+  );
+}
+
 /** A project's Lobu link, pins, a note box, and the brief new threads get. */
 /**
  * What a new thread in the project starts with, as the brief gives it: pins
@@ -368,7 +429,6 @@ function ProjectContext({
   onProject: (project: ProjectMemory) => void;
 }) {
   const rpc = useRpc<typeof rpcContract>();
-  const navigate = useBbNavigate();
   const { busy, error, notice, run } = useActions();
   const [noting, setNoting] = useState(false);
   const [note, setNote] = useState("");
@@ -393,64 +453,27 @@ function ProjectContext({
               }
             />
           ))}
-          {learnedBySession(project.learned).map((group) => (
-            <li key={group.threadId ?? "unknown"} className="py-2">
-              <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Icon name="lobu/memory" className="size-3.5 shrink-0" />
-                <span>Learned in</span>
-                {group.threadId !== null && group.threadTitle !== null ? (
-                  <button
-                    type="button"
-                    className="min-w-0 truncate font-medium text-foreground hover:underline"
-                    onClick={() => navigate.toThread(group.threadId as string)}
-                  >
-                    {group.threadTitle}
-                  </button>
-                ) : (
-                  <span>an earlier thread</span>
-                )}
-              </p>
-              <ul className="mt-1 border-l border-border pl-3">
-                {group.items.map((item) => (
-                  <li
-                    key={`${item.workspace}-${item.eventId ?? item.title}`}
-                    className={cn(
-                      "group flex items-start gap-2 py-1.5 text-sm",
-                      item.eventId !== null && busy === `undo-${item.eventId}` && "opacity-50",
-                    )}
-                  >
-                    <div className="min-w-0 flex-1">
-                      {item.url === null ? (
-                        <span>{item.title}</span>
-                      ) : (
-                        <UrlLink href={item.url} className="hover:underline">
-                          {item.title}
-                        </UrlLink>
-                      )}
-                      {item.content.trim() === "" || item.content === item.title ? null : (
-                        <p className="line-clamp-2 text-xs text-muted-foreground">{item.content}</p>
-                      )}
-                    </div>
-                    {item.eventId === null ? null : (
-                      <IconAction
-                        icon="lobu/close"
-                        label={`Remove "${item.title}" from brief and Lobu`}
-                        disabled={busy === `undo-${item.eventId}`}
-                        onClick={() =>
-                          void run(`undo-${item.eventId}`, async () => {
-                            await rpc.call("undoMemory", { eventId: item.eventId as number });
-                            const refreshed = await rpc.call("projectMemory", { projectId: project.id });
-                            onProject(refreshed.project);
-                            return `Removed "${item.title}". It stays recoverable in Lobu.`;
-                          })
-                        }
-                      />
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </li>
-          ))}
+          <LearnedGroups
+            items={project.learned}
+            action={(item) =>
+              item.eventId === null ? null : (
+                <IconAction
+                  icon="lobu/close"
+                  label={`Remove "${item.title}" from brief and Lobu`}
+                  disabled={busy === `undo-${item.eventId}`}
+                  onClick={() =>
+                    void run(`undo-${item.eventId}`, async () => {
+                      await rpc.call("undoMemory", { eventId: item.eventId as number });
+                      const refreshed = await rpc.call("projectMemory", { projectId: project.id });
+                      onProject(refreshed.project);
+                      return `Removed "${item.title}". It stays recoverable in Lobu.`;
+                    })
+                  }
+                />
+              )
+            }
+            dimmed={(item) => item.eventId !== null && busy === `undo-${item.eventId}`}
+          />
         </ul>
       )}
 
@@ -597,8 +620,8 @@ export function ThreadMemoryPanel({ threadId }: { threadId: string }) {
       </p>
     );
   }
-  const { project, log } = data;
-  const given = log?.given ?? [];
+  const { project, log, startedWith } = data;
+  const given = startedWith;
   const searches = log?.searches ?? [];
   const names = new Map(project === null ? [] : [[project.id, project.name]]);
   return (
@@ -618,16 +641,16 @@ export function ThreadMemoryPanel({ threadId }: { threadId: string }) {
           </Empty>
         ) : (
           <ul className="divide-y divide-border">
-            {given.map((item, index) => (
-              <li key={`${item.eventId ?? "note"}-${index}`} className="flex items-center gap-2 py-2 text-sm">
-                <Icon
-                  name={item.source === "pinned" ? "lobu/pin" : "lobu/memory"}
-                  className="size-3.5 shrink-0 text-muted-foreground"
-                />
-                <span className="min-w-0 flex-1 truncate">{item.title}</span>
-                <span className="shrink-0 text-xs text-muted-foreground">{item.source}</span>
-              </li>
-            ))}
+            {given
+              .filter((item) => item.source === "pinned")
+              .map((item, index) => (
+                <li key={`${item.eventId ?? "note"}-${index}`} className="flex items-center gap-2 py-2 text-sm">
+                  <Icon name="lobu/pin" className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">pinned</span>
+                </li>
+              ))}
+            <LearnedGroups items={given.filter((item) => item.source === "learned")} />
           </ul>
         )}
       </Card>

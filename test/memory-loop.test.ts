@@ -520,8 +520,16 @@ describe("the memory loop", () => {
     expect(text).toContain("Project repository: acme/acme-app");
     expect(text).toContain("Learned in earlier threads of this project:");
     expect(text).toContain(deployGotcha.title);
-    const startLog = (await rpc.threadMemory!({ threadId: "thread-3" })) as { log: { given: unknown[] } };
+    const startLog = (await rpc.threadMemory!({ threadId: "thread-3" })) as {
+      log: { given: unknown[] };
+      startedWith: { source: string; threadId: string | null; threadTitle: string | null; url: string | null }[];
+    };
     expect(startLog.log.given).toHaveLength(2);
+    // The thread's panel shows each memory it started with under the session that taught it.
+    for (const item of startLog.startedWith) {
+      expect(item).toMatchObject({ source: "learned", threadId: "thread-1", threadTitle: "Plan the launch" });
+      expect(item.url).not.toBeNull();
+    }
 
     // An agent search is logged on the thread and counted as a use.
     const found = String(await call("lobu_search", { query: "staging deploy vpn" }, "thread-3"));
