@@ -118,7 +118,19 @@ beforeAll(() => {
       const body = (await request.json()) as Record<string, unknown>;
       if (tool === "save_memory") {
         const supersedesId = typeof body.supersedes_event_id === "number" ? body.supersedes_event_id : null;
-        const entityIds = Array.isArray(body.entity_ids) ? (body.entity_ids as number[]) : [];
+        // Like Lobu: an id links as given, a name links when exactly one non-system
+        // record in the workspace has it (case-insensitive), and the rest come back.
+        const refs = Array.isArray(body.entity_ids) ? (body.entity_ids as (number | { name: string })[]) : [];
+        const unlinked: { name: string; reason: string }[] = [];
+        const entityIds = refs.flatMap((ref) => {
+          if (typeof ref === "number") return [ref];
+          const named = lobu.entities.filter(
+            (e) => e.workspace === workspace && !e.type.startsWith("$") && e.name.toLowerCase() === ref.name.toLowerCase(),
+          );
+          if (named.length === 1) return [named[0]!.id];
+          unlinked.push({ name: ref.name, reason: named.length === 0 ? "not_found" : "ambiguous" });
+          return [];
+        });
         if (supersedesId !== null) {
           const target = lobu.memories.find((m) => m.id === supersedesId && m.workspace === workspace);
           if (target === undefined) return Response.json({ error: `Cannot supersede event ${supersedesId}` }, { status: 404 });
@@ -137,7 +149,7 @@ beforeAll(() => {
             deleted: false,
             supersededBy: null,
           });
-          return Response.json({ id, view_url: `/${workspace}/events/${id}` });
+          return Response.json({ id, view_url: `/${workspace}/events/${id}`, entity_ids: entityIds, unlinked });
         }
         const id = lobu.nextId++;
         lobu.memories.push({
@@ -150,7 +162,7 @@ beforeAll(() => {
           deleted: false,
           supersededBy: null,
         });
-        return Response.json({ id, view_url: `/${workspace}/events/${id}` });
+        return Response.json({ id, view_url: `/${workspace}/events/${id}`, entity_ids: entityIds, unlinked });
       }
       if (tool === "search_memory") {
         if (typeof body.entity_id === "number") {
@@ -175,19 +187,6 @@ beforeAll(() => {
           });
         }
         const query = String(body.query);
-        if (body.fuzzy === false) {
-          const inWorkspace = lobu.entities.filter((e) => e.workspace === workspace);
-          const exact = inWorkspace.filter((e) => e.name.toLowerCase() === query.toLowerCase());
-          // Like older Lobu servers: an exact search that found nothing falls back to partial names.
-          const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
-          const hits = exact.length > 0 ? exact : inWorkspace.filter((e) => words.some((w) => e.name.toLowerCase().includes(w)));
-          return Response.json({
-            content: [],
-            matches: hits
-              .slice(0, Number(body.limit))
-              .map((e) => ({ id: e.id, type: e.type, name: e.name, slug: e.slug, workspace_slug: workspace, match_reason: "exact_name" })),
-          });
-        }
         lobu.searches.push({ workspace, query });
         const content = lobu.memories
           .filter((m) => m.workspace === workspace && !m.deleted && m.supersededBy === null)

@@ -56,15 +56,7 @@ import {
   THREAD_LOGS_KEY,
 } from "./lib/memory-store";
 import { discoverWorkspaces, savedEventsPath, type WorkspaceOwner } from "./lib/workspaces";
-import {
-  describeUnlinked,
-  githubRepoOf,
-  lookupTermOf,
-  nameAppearsIn,
-  normalizeName,
-  resolveMention,
-  tooVagueToLink,
-} from "./lib/entity-links";
+import { describeUnlinked, entityRefsOf, githubRepoOf, nameAppearsIn } from "./lib/entity-links";
 import {
   RECAP_SOURCE_KEY,
   RECAP_TITLE_KEY,
@@ -720,17 +712,6 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
-  /** Entities in one workspace named exactly `term`; null when Lobu could not be asked. */
-  async function lookupName(owner: WorkspaceOwner, workspace: string, term: string): Promise<EntityHit[] | null> {
-    try {
-      const raw = await api.findEntitiesNamed(owner.context, workspace, term);
-      return entitiesFromSearch(raw, "", workspace).filter((entity) => entity.workspace === workspace);
-    } catch (cause) {
-      bb.log.warn(`Lobu entity lookup for ${JSON.stringify(term)} failed: ${String(cause)}`);
-      return null;
-    }
-  }
-
   /** The "owner/repo" a bb project's git remote names, or null. */
   async function projectRepoOf(projectId: string | null): Promise<string | null> {
     if (projectId === null) return null;
@@ -755,43 +736,24 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   /**
-   * The entities each draft links to in the workspace it is saved to: explicit
-   * ids that are records there, and mentions that exactly one record is named.
-   * Also says what stayed unlinked and why.
+   * The explicit entity ids of each draft that are records in the workspace it
+   * is saved to, and a line for each one that is not. Mentions are linked by
+   * Lobu itself, by exact name, when the memory is saved.
    */
-  async function entityLinksFor(
+  async function confirmedEntityIds(
     owner: WorkspaceOwner,
     workspace: string,
     drafts: readonly MemoryDraft[],
   ): Promise<{ ids: number[][]; unlinked: string[] }> {
-    const lookups = new Map<string, Promise<EntityHit[] | null>>();
-    const lookup = (term: string) => {
-      const key = normalizeName(term);
-      let pending = lookups.get(key);
-      if (pending === undefined) {
-        pending = lookupName(owner, workspace, term);
-        lookups.set(key, pending);
-      }
-      return pending;
-    };
     const unlinked: string[] = [];
     const ids = await Promise.all(
       drafts.map(async (draft) => {
-        const linked = new Set<number>();
         const explicit = draft.entityIds ?? [];
         const valid = await entityIdsIn(owner, workspace, explicit);
-        for (const id of valid) linked.add(id);
         for (const id of explicit) {
           if (!valid.includes(id)) unlinked.push(`entity id ${id}: not a record in the ${workspace} workspace; not linked.`);
         }
-        const outcomes = await Promise.all(
-          (draft.mentions ?? []).map(async (mention) =>
-            resolveMention(mention, tooVagueToLink(mention) ? null : await lookup(lookupTermOf(mention))),
-          ),
-        );
-        for (const outcome of outcomes) if (outcome.status === "linked") linked.add(outcome.entity.id);
-        unlinked.push(...describeUnlinked(outcomes));
-        return [...linked];
+        return valid;
       }),
     );
     return { ids, unlinked: [...new Set(unlinked)] };
@@ -807,8 +769,8 @@ export default async function plugin(bb: BbPluginApi) {
     const replacements: { replacedEventId?: number | null; record: SavedRecord }[] = [];
     // The brief that follows a save shows the thread's current browser tab.
     await refreshBbBrowserTab(threadId);
-    const links = await entityLinksFor(personal.owner, personal.slug, drafts);
-    outcome.unlinked = links.unlinked;
+    const links = await confirmedEntityIds(personal.owner, personal.slug, drafts);
+    const unlinked = new Set(links.unlinked);
 
     for (const [index, draft] of drafts.entries()) {
       try {
@@ -820,17 +782,18 @@ export default async function plugin(bb: BbPluginApi) {
           outcome.duplicates.push({ title: draft.title, existing: near });
           continue;
         }
-        const linked = links.ids[index] ?? [];
-        const entityIdsToSend = linked.length > 0 ? linked : undefined;
+        const confirmed = { ...draft, entityIds: links.ids[index] ?? [] };
+        const refs = entityRefsOf(confirmed.entityIds, draft.mentions ?? []);
 
         const saved = await api.saveMemory(personal.owner.context, personal.slug, {
           title: draft.title,
           content: draft.content,
           semantic_type: draft.kind,
-          idempotency_key: idempotencyKey(threadId, personal.slug, { ...draft, entityIds: entityIdsToSend }),
+          idempotency_key: idempotencyKey(threadId, personal.slug, confirmed),
           ...(draft.replacesEventId ? { supersedes_event_id: draft.replacesEventId } : {}),
-          ...(entityIdsToSend ? { entity_ids: entityIdsToSend } : {}),
+          ...(refs.length > 0 ? { entity_ids: refs } : {}),
         });
+        for (const line of describeUnlinked(saved.unlinked)) unlinked.add(line);
         const record: SavedRecord = {
           eventId: saved.id,
           workspace: personal.slug,
@@ -840,7 +803,7 @@ export default async function plugin(bb: BbPluginApi) {
           url: absoluteUrl(saved.viewUrl, baseUrl),
           threadId,
           projectId,
-          entityIds: entityIdsToSend ?? null,
+          entityIds: saved.entityIds.length > 0 ? saved.entityIds : null,
           savedAt: Date.now(),
           uses: 0,
           lastUsedAt: null,
@@ -852,6 +815,7 @@ export default async function plugin(bb: BbPluginApi) {
       }
     }
     rememberWithReplacements(replacements);
+    outcome.unlinked = [...unlinked];
     return outcome;
   }
 
@@ -930,11 +894,12 @@ export default async function plugin(bb: BbPluginApi) {
     const owner = owners.get(submission.workspace);
     if (owner === undefined) throw new Error(`Unknown workspace ${submission.workspace}`);
     const projectId = await projectOfThread(threadId);
-    const links = await entityLinksFor(owner, submission.workspace, submission.memories);
+    const links = await confirmedEntityIds(owner, submission.workspace, submission.memories);
     submission.memories.forEach((memoryDraft, index) => {
       memoryDraft.entityIds = links.ids[index] ?? [];
     });
-    const outcome = await saveMemories(api, owner, (await reachLobu()).origin, threadId, submission);
+    const saved = await saveMemories(api, owner, (await reachLobu()).origin, threadId, submission);
+    const outcome = { ...saved, unlinked: [...new Set([...links.unlinked, ...saved.unlinked])] };
     await bb.storage.kv.set(PREFERRED_WORKSPACE, submission.workspace);
     const now = Date.now();
     rememberWithReplacements(

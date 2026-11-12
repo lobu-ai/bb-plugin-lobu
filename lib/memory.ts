@@ -1,6 +1,7 @@
 // Save to Lobu: turns reviewed drafts into Lobu memories with save_memory,
 // through the user's CLI login.
 import { createHash } from "node:crypto";
+import { describeUnlinked, entityRefsOf, normalizeName } from "./entity-links";
 import type { MemoryDraft, RememberSubmission } from "./memory-contract";
 import type { LobuApi } from "./lobu-api";
 import type { WorkspaceOwner } from "./workspaces";
@@ -11,6 +12,8 @@ export interface SaveOutcome {
   workspace: string;
   saved: { eventId: number; title: string; url: string | null; entityIds?: number[]; replacedEventId?: number }[];
   failed: { title: string; error: string }[];
+  /** Why a name or id was not linked, for the agent. */
+  unlinked: string[];
 }
 
 /** A draft from text the user picked in the timeline: first line as title, the rest as content. */
@@ -71,8 +74,10 @@ export function absoluteUrl(viewUrl: string | null, baseUrl: string): string | n
 /** Same thread, workspace, and text saves once, even if the form is submitted twice. */
 export function idempotencyKey(threadId: string, workspace: string, memory: MemoryDraft): string {
   const replaces = memory.replacesEventId ? `\nreplaces:${memory.replacesEventId}` : "";
-  const entities =
-    memory.entityIds && memory.entityIds.length > 0 ? `\nentities:${[...memory.entityIds].sort().join(",")}` : "";
+  const refs = entityRefsOf(memory.entityIds ?? [], memory.mentions ?? []).map((ref) =>
+    typeof ref === "number" ? String(ref) : `name:${normalizeName(ref.name)}`,
+  );
+  const entities = refs.length > 0 ? `\nentities:${refs.sort().join(",")}` : "";
   const digest = createHash("sha256")
     .update(`${threadId}\n${workspace}\n${memory.title}\n${memory.content}${replaces}${entities}`)
     .digest("hex");
@@ -90,22 +95,23 @@ export async function saveMemories(
   const results = await Promise.all(
     submission.memories.map(async (memory) => {
       try {
-        const entityIds = memory.entityIds && memory.entityIds.length > 0 ? memory.entityIds : undefined;
+        const refs = entityRefsOf(memory.entityIds ?? [], memory.mentions ?? []);
         const saved = await api.saveMemory(owner.context, workspace, {
           title: memory.title,
           content: memory.content,
           semantic_type: memory.kind,
           idempotency_key: idempotencyKey(threadId, workspace, memory),
           ...(memory.replacesEventId ? { supersedes_event_id: memory.replacesEventId } : {}),
-          ...(entityIds ? { entity_ids: entityIds } : {}),
+          ...(refs.length > 0 ? { entity_ids: refs } : {}),
         });
         return {
           ok: true as const,
           eventId: saved.id,
           title: memory.title,
           url: absoluteUrl(saved.viewUrl, baseUrl),
-          ...(entityIds ? { entityIds } : {}),
+          ...(saved.entityIds.length > 0 ? { entityIds: saved.entityIds } : {}),
           ...(memory.replacesEventId ? { replacedEventId: memory.replacesEventId } : {}),
+          unlinked: describeUnlinked(saved.unlinked),
         };
       } catch (cause) {
         return { ok: false as const, title: memory.title, error: cause instanceof Error ? cause.message : String(cause) };
@@ -124,6 +130,7 @@ export async function saveMemories(
         ...(replacedEventId === undefined ? {} : { replacedEventId }),
       })),
     failed: results.filter((r) => !r.ok).map(({ title, error }) => ({ title, error })),
+    unlinked: [...new Set(results.flatMap((r) => (r.ok ? r.unlinked : [])))],
   };
 }
 
@@ -153,5 +160,7 @@ export function describeOutcome(outcome: SaveOutcome): { title: string; detail: 
 export function outcomeForAgent(outcome: SaveOutcome | null): string {
   if (outcome === null) return "The user chose not to save these memories. Do not propose them again.";
   const { title, detail } = describeOutcome(outcome);
-  return detail === "" ? `${title}. The user unticked every proposed memory.` : `${title}:\n${detail}`;
+  if (detail === "") return `${title}. The user unticked every proposed memory.`;
+  const unlinked = outcome.unlinked.length > 0 ? `\nLeft unlinked:\n${outcome.unlinked.map((line) => `- ${line}`).join("\n")}` : "";
+  return `${title}:\n${detail}${unlinked}`;
 }

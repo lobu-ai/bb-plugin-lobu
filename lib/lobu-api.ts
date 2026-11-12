@@ -2,12 +2,11 @@
 // plugin server process and are never sent to the page.
 import { z } from "zod";
 import { cliFailure, createCliRunner, LobuSetupError } from "./cli";
+import type { EntityRef, UnlinkedName } from "./entity-links";
 
 /** How long a `lobu whoami` session is reused before asking the CLI again. */
 const SESSION_TTL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
-/** Exact-name hits read per mention: enough to see a second record with the same name. */
-const EXACT_NAME_LIMIT = 5;
 /** The semantic types save_memory writes; read_knowledge filters by these. */
 const MEMORY_KINDS = ["fact", "decision", "preference", "observation", "note"] as const;
 /** A new Lobu on this machine loads its search model on the first search, which takes longer. */
@@ -27,12 +26,16 @@ export interface SaveMemoryInput {
   semantic_type: string;
   idempotency_key: string;
   supersedes_event_id?: number;
-  entity_ids?: number[];
+  entity_ids?: EntityRef[];
 }
 
 export interface SavedMemory {
   id: number;
   viewUrl: string | null;
+  /** Every record the memory is linked to, as Lobu stored it. */
+  entityIds: number[];
+  /** Names Lobu did not link, and why. */
+  unlinked: UnlinkedName[];
 }
 
 /** A CLI login as `lobu whoami --json` reports it, the same source the Lobu Mac app reads. */
@@ -420,13 +423,20 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
       const saved = (await request(context, `/api/${encodeURIComponent(workspace)}/save_memory`, memory)) as {
         id?: number;
         view_url?: string;
+        entity_ids?: unknown[];
+        unlinked?: UnlinkedName[];
         error?: string | { message?: string };
       };
       if (typeof saved.id !== "number") {
         const error = typeof saved.error === "string" ? saved.error : saved.error?.message;
         throw new Error(error ?? "save_memory returned no event");
       }
-      return { id: saved.id, viewUrl: saved.view_url ?? null };
+      return {
+        id: saved.id,
+        viewUrl: saved.view_url ?? null,
+        entityIds: (saved.entity_ids ?? []).map(Number).filter((id) => Number.isInteger(id) && id > 0),
+        unlinked: saved.unlinked ?? [],
+      };
     },
 
     /** Lobu's search_memory over one workspace's saved memory; the raw response. */
@@ -445,23 +455,6 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
     async readEntity(context: string | null, workspace: string, entityId: number): Promise<unknown> {
       return request(context, `/api/${encodeURIComponent(workspace)}/search_memory`, {
         entity_id: entityId,
-        include_content: false,
-        include_connections: false,
-        include_public_catalogs: false,
-      });
-    },
-
-    /**
-     * Entities in one workspace whose name, or an identifier, is exactly `name`
-     * (case-insensitive): Lobu's search_memory with fuzzy off. Older Lobu servers
-     * fall back to partial names when nothing matches exactly, so callers still
-     * compare each hit's name.
-     */
-    async findEntitiesNamed(context: string | null, workspace: string, name: string): Promise<unknown> {
-      return request(context, `/api/${encodeURIComponent(workspace)}/search_memory`, {
-        query: name,
-        fuzzy: false,
-        limit: EXACT_NAME_LIMIT,
         include_content: false,
         include_connections: false,
         include_public_catalogs: false,
