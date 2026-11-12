@@ -11,6 +11,8 @@ import { cn } from "@/lib/utils";
 
 /** How often the page checks whether a browser approval has landed. */
 const SIGN_IN_POLL_MS = 3_000;
+/** How often a card showing a login problem checks again. */
+const RECHECK_MS = 5_000;
 
 const host = (origin: string) => origin.replace(/^https?:\/\//, "");
 
@@ -40,6 +42,14 @@ export function useSetupStatus() {
   useEffect(() => {
     void reload();
   }, [reload]);
+  // A failed check (a slow or crashed CLI run) clears itself on the next one,
+  // so keep checking while a problem is shown instead of leaving it stale.
+  const problem = status?.login?.problem ?? null;
+  useEffect(() => {
+    if (problem === null) return;
+    const timer = setInterval(() => void reload(), RECHECK_MS);
+    return () => clearInterval(timer);
+  }, [problem, reload]);
   return { status, error, reload };
 }
 
@@ -244,8 +254,8 @@ function StatusBlock({ status }: { status: SetupStatus }) {
   }
   return (
     <p role="alert" className="text-sm">
-      <span className="text-destructive">‘{name}’ isn’t connected.</span>{" "}
-      <span className="text-muted-foreground">Expand CONTEXT below to sign in again.</span>
+      <span className="text-destructive">‘{name}’ isn’t connected: {login.problem}</span>{" "}
+      <span className="text-muted-foreground">Expand CONTEXT below to sign in or switch.</span>
     </p>
   );
 }

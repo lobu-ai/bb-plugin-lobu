@@ -132,10 +132,10 @@ describe("classifying a failed CLI run", () => {
     expect(cliFailure({ code: "ENOENT" }, null).code).toBe("cli_missing");
   });
 
-  test("lobu token's exit 1 means no usable login", () => {
-    const failure = cliFailure({ code: 1, stderr: "Not logged in. Run `lobu login` first." }, "work");
-    expect(failure.code).toBe("not_logged_in");
-    expect(failure.message).toBe("The lobu CLI has no login for work.");
+  test("a CLI crash with exit 1 is a CLI failure, not a sign-out", () => {
+    const failure = cliFailure({ code: 1, stderr: 'Error: Unknown context "work".\n' }, "work");
+    expect(failure.code).toBe("cli_failed");
+    expect(failure.message).toBe('bb could not run the lobu CLI: Error: Unknown context "work".');
   });
 
   test("a CLI that cannot start shows the CLI's own error", () => {

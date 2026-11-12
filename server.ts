@@ -1956,7 +1956,17 @@ export default async function plugin(bb: BbPluginApi) {
   // Concurrent card renders share one status computation instead of each
   // re-spawning the CLI; the UI polls this every few seconds while waiting.
   let setupFlight: Promise<SetupStatus> | null = null;
+  // The card re-checks every few seconds while a problem shows; log each new
+  // problem once so a failure that clears itself still leaves its cause.
+  let loggedProblem: string | null = null;
   async function computeSetupStatus(): Promise<SetupStatus> {
+    const status = await readSetupStatus();
+    const problem = status.login?.problem ?? null;
+    if (problem !== null && problem !== loggedProblem) bb.log.warn(`Lobu login '${status.login?.context ?? "active"}' is not usable: ${problem}`);
+    loggedProblem = problem;
+    return status;
+  }
+  async function readSetupStatus(): Promise<SetupStatus> {
       const [cli, installer] = await Promise.all([api.cliState(), api.installer()]);
       const starting = localChild !== null;
       const listed = cli.state === "ready" ? ((await api.cliContexts()) ?? []) : [];
