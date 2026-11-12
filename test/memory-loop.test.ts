@@ -558,12 +558,22 @@ describe("the memory loop", () => {
     // The New thread screen shows the project in view as a new thread there receives it.
     const home = (await rpc.projectMemory!({ projectId: "proj-1" })) as {
       personal: string;
-      project: { name: string; workspace: string; pins: { title: string }[]; learned: { title: string }[] };
+      project: {
+        name: string;
+        workspace: string;
+        pins: { title: string }[];
+        learned: { title: string; threadId: string | null; threadTitle: string | null; url: string | null }[];
+      };
     };
     expect(home.personal).toBe("me");
     expect(home.project).toMatchObject({ name: "Acme app", workspace: "team" });
     expect(home.project.pins.map((p) => p.title)).toEqual(["Release notes go in CHANGELOG.md"]);
     expect(home.project.learned.map((l) => l.title).sort()).toEqual([deployGotcha.title, prPreference.title].sort());
+    // Each learned memory names the session that taught it and links to it in Lobu.
+    for (const item of home.project.learned) {
+      expect(item).toMatchObject({ threadId: "thread-1", threadTitle: "Plan the launch" });
+      expect(item.url).not.toBeNull();
+    }
 
     // Undo hides the memory in Lobu and drops it from the plugin's list.
     const preference = afterSearch.saved.find((r) => r.title === prPreference.title)!;

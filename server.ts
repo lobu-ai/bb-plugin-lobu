@@ -581,12 +581,59 @@ export default async function plugin(bb: BbPluginApi) {
     };
   }
 
+  // Titles and archive state of the threads memories were saved in, for
+  // grouping by session; a deleted or unknown thread is cached as null.
+  const sessionThreads = new Map<string, SessionThread | null>();
+  async function loadSessionThreads(threadIds: string[]): Promise<ReadonlyMap<string, SessionThread>> {
+    const ids = [...new Set(threadIds)].filter((id) => id !== "cli" && id !== "lobu" && !id.startsWith("project:"));
+    await Promise.all(
+      ids.map(async (threadId) => {
+        const thread = await bb.sdk.threads.get({ threadId }).catch(() => null);
+        sessionThreads.set(
+          threadId,
+          thread === null || thread.deletedAt !== null
+            ? null
+            : {
+                title: thread.title ?? thread.titleFallback,
+                projectName: thread.projectId ? (projectNames.get(thread.projectId) ?? null) : null,
+                archivedAt: thread.archivedAt,
+              },
+        );
+      }),
+    );
+    const known = new Map<string, SessionThread>();
+    for (const id of ids) {
+      const thread = sessionThreads.get(id);
+      if (thread) known.set(id, thread);
+    }
+    return known;
+  }
+
   function projectView(projectId: string): ProjectMemory {
     const { name, workspace, pins, brief } = projectState(projectId);
-    const learned = (brief?.given ?? []).flatMap(({ eventId, workspace: slug, title, source }) =>
-      source === "learned" ? [{ eventId, workspace: slug, title }] : [],
-    );
+    const learned = (brief?.given ?? []).flatMap(({ eventId, workspace: slug, title, source }) => {
+      if (source !== "learned") return [];
+      const record = eventId === null ? undefined : memory.saved.find((saved) => saved.eventId === eventId && saved.workspace === slug);
+      const threadId = record === undefined || record.threadId === "lobu" ? null : record.threadId;
+      return [
+        {
+          eventId,
+          workspace: slug,
+          title,
+          content: record?.content ?? "",
+          url: record?.url ?? null,
+          threadId,
+          threadTitle: threadId === null ? null : (sessionThreads.get(threadId)?.title ?? null),
+        },
+      ];
+    });
     return { id: projectId, name, workspace, pins, learned };
+  }
+
+  /** projectView, after looking up the threads its learned memories came from. */
+  async function projectViewWithThreads(projectId: string): Promise<ProjectMemory> {
+    await loadSessionThreads(projectView(projectId).learned.flatMap((item) => (item.threadId === null ? [] : [item.threadId])));
+    return projectView(projectId);
   }
 
   async function projectOfThread(threadId: string): Promise<string | null> {
@@ -2139,22 +2186,7 @@ export default async function plugin(bb: BbPluginApi) {
         .sort((a, b) => b.savedAt - a.savedAt)
         .slice(0, 50);
       const projectNameOf = (projectId: string | null) => (projectId === null ? null : (projectNames.get(projectId) ?? null));
-      const threadIds = [...new Set(records.map((record) => record.threadId))].filter(
-        (id) => id !== "cli" && !id.startsWith("project:"),
-      );
-      const threads = new Map<string, SessionThread>();
-      await Promise.all(
-        threadIds.map(async (threadId) => {
-          // A deleted thread has no title to show; its saves still group under its id.
-          const thread = await bb.sdk.threads.get({ threadId }).catch(() => null);
-          if (thread === null || thread.deletedAt !== null) return;
-          threads.set(threadId, {
-            title: thread.title ?? thread.titleFallback,
-            projectName: projectNameOf(thread.projectId ?? null),
-            archivedAt: thread.archivedAt,
-          });
-        }),
-      );
+      const threads = await loadSessionThreads(records.map((record) => record.threadId));
       return { sessions: groupBySession(records, threads, memory.logs, projectNameOf) };
     },
     connections: async () => {
@@ -2217,7 +2249,7 @@ export default async function plugin(bb: BbPluginApi) {
       // The user is looking at Lobu: warm the @-mention lists in the background
       // so the first @ keystroke filters in memory instead of fetching.
       void mentionLists().catch(() => undefined);
-      return { ...(await workspaceOptions()), project: projectView(projectId) };
+      return { ...(await workspaceOptions()), project: await projectViewWithThreads(projectId) };
     },
     threadMemory: async ({ threadId }) => {
       const projectId = await projectOfThread(threadId);

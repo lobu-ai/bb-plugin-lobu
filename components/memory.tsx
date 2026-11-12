@@ -2,7 +2,7 @@
 // looked up, and saved, and the project's pins, note box, and brief.
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { UrlLink, useRpc } from "@get-bb/plugin-sdk/app";
+import { UrlLink, useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "@/lib/contract";
 import type {
   MemoryHit,
@@ -338,6 +338,20 @@ function HitRow({ hit }: { hit: MemoryHit }) {
   );
 }
 
+type LearnedItem = ProjectMemory["learned"][number];
+
+/** The brief's learned memories grouped by the thread that saved them, in brief order. */
+function learnedBySession(items: LearnedItem[]) {
+  const groups = new Map<string, { threadId: string | null; threadTitle: string | null; items: LearnedItem[] }>();
+  for (const item of items) {
+    const key = item.threadId ?? "";
+    const group = groups.get(key) ?? { threadId: item.threadId, threadTitle: item.threadTitle, items: [] };
+    group.items.push(item);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
 /** A project's Lobu link, pins, a note box, and the brief new threads get. */
 /**
  * What a new thread in the project starts with, as the brief gives it: pins
@@ -354,6 +368,7 @@ function ProjectContext({
   onProject: (project: ProjectMemory) => void;
 }) {
   const rpc = useRpc<typeof rpcContract>();
+  const navigate = useBbNavigate();
   const { busy, error, notice, run } = useActions();
   const [noting, setNoting] = useState(false);
   const [note, setNote] = useState("");
@@ -378,31 +393,62 @@ function ProjectContext({
               }
             />
           ))}
-          {project.learned.map((item) => (
-            <li
-              key={`${item.workspace}-${item.eventId ?? item.title}`}
-              className={cn(
-                "group flex items-start gap-2 py-2 text-sm",
-                item.eventId !== null && busy === `undo-${item.eventId}` && "opacity-50",
-              )}
-            >
-              <Icon name="lobu/memory" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1">{item.title}</span>
-              {item.eventId === null ? null : (
-                <IconAction
-                  icon="lobu/close"
-                  label={`Remove "${item.title}" from brief and Lobu`}
-                  disabled={busy === `undo-${item.eventId}`}
-                  onClick={() =>
-                    void run(`undo-${item.eventId}`, async () => {
-                      await rpc.call("undoMemory", { eventId: item.eventId as number });
-                      const refreshed = await rpc.call("projectMemory", { projectId: project.id });
-                      onProject(refreshed.project);
-                      return `Removed "${item.title}". It stays recoverable in Lobu.`;
-                    })
-                  }
-                />
-              )}
+          {learnedBySession(project.learned).map((group) => (
+            <li key={group.threadId ?? "unknown"} className="py-2">
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Icon name="lobu/memory" className="size-3.5 shrink-0" />
+                <span>Learned in</span>
+                {group.threadId !== null && group.threadTitle !== null ? (
+                  <button
+                    type="button"
+                    className="min-w-0 truncate font-medium text-foreground hover:underline"
+                    onClick={() => navigate.toThread(group.threadId as string)}
+                  >
+                    {group.threadTitle}
+                  </button>
+                ) : (
+                  <span>an earlier thread</span>
+                )}
+              </p>
+              <ul className="mt-1 border-l border-border pl-3">
+                {group.items.map((item) => (
+                  <li
+                    key={`${item.workspace}-${item.eventId ?? item.title}`}
+                    className={cn(
+                      "group flex items-start gap-2 py-1.5 text-sm",
+                      item.eventId !== null && busy === `undo-${item.eventId}` && "opacity-50",
+                    )}
+                  >
+                    <div className="min-w-0 flex-1">
+                      {item.url === null ? (
+                        <span>{item.title}</span>
+                      ) : (
+                        <UrlLink href={item.url} className="hover:underline">
+                          {item.title}
+                        </UrlLink>
+                      )}
+                      {item.content.trim() === "" || item.content === item.title ? null : (
+                        <p className="line-clamp-2 text-xs text-muted-foreground">{item.content}</p>
+                      )}
+                    </div>
+                    {item.eventId === null ? null : (
+                      <IconAction
+                        icon="lobu/close"
+                        label={`Remove "${item.title}" from brief and Lobu`}
+                        disabled={busy === `undo-${item.eventId}`}
+                        onClick={() =>
+                          void run(`undo-${item.eventId}`, async () => {
+                            await rpc.call("undoMemory", { eventId: item.eventId as number });
+                            const refreshed = await rpc.call("projectMemory", { projectId: project.id });
+                            onProject(refreshed.project);
+                            return `Removed "${item.title}". It stays recoverable in Lobu.`;
+                          })
+                        }
+                      />
+                    )}
+                  </li>
+                ))}
+              </ul>
             </li>
           ))}
         </ul>

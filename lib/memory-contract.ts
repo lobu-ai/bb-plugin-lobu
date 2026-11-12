@@ -161,7 +161,18 @@ export const projectMemorySchema = z.object({
   workspace: z.string().nullable(),
   pins: z.array(pinnedMemorySchema),
   /** The learned memories a new thread here receives after the pins, in brief order. */
-  learned: z.array(z.object({ eventId: z.number().nullable(), workspace: z.string(), title: z.string() })),
+  learned: z.array(
+    z.object({
+      eventId: z.number().nullable(),
+      workspace: z.string(),
+      title: z.string(),
+      content: z.string(),
+      url: z.string().nullable(),
+      /** The bb thread that saved it, and that thread's title; null when bb did not save it or no longer has the thread. */
+      threadId: z.string().nullable(),
+      threadTitle: z.string().nullable(),
+    }),
+  ),
 });
 export type ProjectMemory = z.infer<typeof projectMemorySchema>;
 
