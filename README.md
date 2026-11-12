@@ -90,11 +90,12 @@ It works as a loop:
   standing preferences, at most three at a time and each with an evidence
   quote. Each memory is linked to Lobu entities only on certain evidence: the
   full names the agent lists in `mentions` (`--mentions`) when exactly one record
-  in the destination workspace has that name (Lobu's exact search), and explicit
-  `entityIds` that are records there. The project's repository is one such
-  mention, listed only when the memory is about that codebase or product.
-  One-word names, shared names, and member records are never linked, and the
-  agent is told which mentions stayed unlinked and why. The plugin never
+  in the destination workspace has that name (Lobu resolves it when the memory
+  is saved), and explicit `entityIds` that are records there. The project's
+  repository is one such mention, listed only when the memory is about that
+  codebase or product. Partial names, shared names, and member records are
+  never linked, and the agent is told which mentions stayed unlinked and why.
+  This needs a Lobu server whose save_memory accepts names in `entity_ids`. The plugin never
   creates entities. Passing `replacesEventId` (`--replaces-id`) supersedes an outdated
   memory instead of leaving both active. With **Save memories automatically**
   on (the default), saves go straight to your personal workspace, and anything
