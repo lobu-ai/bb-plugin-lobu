@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Memories link to entities only on certain evidence. Fuzzy name search over
+  transcript turns, tab titles, and memory text linked memories to unrelated
+  people ("Hand off" to Hande, Handy, and Handel), and the same links went on
+  every memory saved together. Now a memory links only to `mentions` that
+  exactly one record in its workspace is named (Lobu's exact search), and to
+  explicit `entityIds` that exist there. The project's repository is no longer
+  linked to every memory: the agent mentions it only for a memory about that
+  codebase or product. The plugin no longer creates entities from tabs or
+  transcripts, and `lobu_search` lists only entities the query names.
+
 ## 0.7.3
 
 - **All of Lobu** filters: pick a workspace, memory kinds, and a time window

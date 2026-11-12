@@ -222,10 +222,11 @@ export function briefFor(input: {
   linkedWorkspace: string | null;
   pins: PinnedMemory[];
   learned: SavedRecord[];
-  projectEntity?: EntityHit | null;
+  /** The project's repository ("owner/repo"), which a memory about it mentions. */
+  projectRepo?: string | null;
   activeTab?: { title: string; url: string } | null;
 }): Brief | null {
-  const { projectName, linkedWorkspace, pins, projectEntity, activeTab } = input;
+  const { projectName, linkedWorkspace, pins, projectRepo, activeTab } = input;
   const learned = input.learned.slice(0, MAX_LEARNED_IN_BRIEF);
   if (pins.length === 0 && learned.length === 0) return null;
   const header = [
@@ -237,9 +238,7 @@ export function briefFor(input: {
   let used = header.join("\n").length + 200;
 
   const ambient: string[] = [];
-  if (projectEntity) {
-    ambient.push(`- Matched project entity: ${projectEntity.name} (id: ${projectEntity.id}, type: ${projectEntity.type})`);
-  }
+  if (projectRepo) ambient.push(`- Project repository: ${projectRepo}`);
   if (activeTab) {
     ambient.push(`- Active browser tab: ${clip(activeTab.title, 120)} (${clip(activeTab.url, 160)})`);
   }

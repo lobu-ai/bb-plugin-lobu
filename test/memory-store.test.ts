@@ -43,16 +43,8 @@ describe("briefFor", () => {
     expect(brief.given.length).toBeLessThanOrEqual(9);
   });
 
-  test("includes ambient project entity and active browser tab when present", () => {
+  test("includes the project repository and active browser tab when present", () => {
     const pins = [{ eventId: null, workspace: "me", title: "Pinned note", content: "Pinned body", url: null, pinnedAt: 1 }];
-    const projectEntity = {
-      id: 42,
-      type: "project",
-      name: "Acme App",
-      slug: "acme-app",
-      workspace: "me",
-      url: "http://localhost/me/project/acme-app",
-    };
     const activeTab = {
       title: "Acme App Dashboard",
       url: "https://acme.example.com/dashboard",
@@ -62,11 +54,11 @@ describe("briefFor", () => {
       linkedWorkspace: null,
       pins,
       learned: [],
-      projectEntity,
+      projectRepo: "acme/acme-app",
       activeTab,
     })!;
     expect(brief.text).toContain("Ambient workspace context:");
-    expect(brief.text).toContain("Matched project entity: Acme App (id: 42, type: project)");
+    expect(brief.text).toContain("Project repository: acme/acme-app");
     expect(brief.text).toContain("Active browser tab: Acme App Dashboard (https://acme.example.com/dashboard)");
     expect(brief.given).toHaveLength(1);
     expect(brief.given[0].source).toBe("pinned");

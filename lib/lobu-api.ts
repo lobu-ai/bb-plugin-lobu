@@ -2,7 +2,7 @@
 // plugin server process and are never sent to the page.
 import { z } from "zod";
 import { cliFailure, createCliRunner, LobuSetupError } from "./cli";
-import type { EntityHit } from "./memory-contract";
+import type { EntityRef, UnlinkedName } from "./entity-links";
 
 /** How long a `lobu whoami` session is reused before asking the CLI again. */
 const SESSION_TTL_MS = 5 * 60_000;
@@ -26,12 +26,16 @@ export interface SaveMemoryInput {
   semantic_type: string;
   idempotency_key: string;
   supersedes_event_id?: number;
-  entity_ids?: number[];
+  entity_ids?: EntityRef[];
 }
 
 export interface SavedMemory {
   id: number;
   viewUrl: string | null;
+  /** Every record the memory is linked to, as Lobu stored it. */
+  entityIds: number[];
+  /** Names Lobu did not link, and why. */
+  unlinked: UnlinkedName[];
 }
 
 /** A CLI login as `lobu whoami --json` reports it, the same source the Lobu Mac app reads. */
@@ -419,13 +423,20 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
       const saved = (await request(context, `/api/${encodeURIComponent(workspace)}/save_memory`, memory)) as {
         id?: number;
         view_url?: string;
+        entity_ids?: unknown[];
+        unlinked?: UnlinkedName[];
         error?: string | { message?: string };
       };
       if (typeof saved.id !== "number") {
         const error = typeof saved.error === "string" ? saved.error : saved.error?.message;
         throw new Error(error ?? "save_memory returned no event");
       }
-      return { id: saved.id, viewUrl: saved.view_url ?? null };
+      return {
+        id: saved.id,
+        viewUrl: saved.view_url ?? null,
+        entityIds: (saved.entity_ids ?? []).map(Number).filter((id) => Number.isInteger(id) && id > 0),
+        unlinked: saved.unlinked ?? [],
+      };
     },
 
     /** Lobu's search_memory over one workspace's saved memory; the raw response. */
@@ -448,85 +459,6 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
         include_connections: false,
         include_public_catalogs: false,
       });
-    },
-
-    /** Available entity type slugs in one workspace (from manage_entity_schema). */
-    async listEntityTypes(context: string | null, workspace: string): Promise<string[]> {
-      try {
-        const result = (await request(context, `/api/${encodeURIComponent(workspace)}/manage_entity_schema`, {
-          schema_type: "entity_type",
-          action: "list",
-        })) as { entity_types?: { slug?: string }[] };
-        if (Array.isArray(result.entity_types)) {
-          return result.entity_types
-            .map((t) => t.slug)
-            .filter((slug): slug is string => typeof slug === "string" && slug.length > 0);
-        }
-      } catch {
-        // manage_entity_schema not supported or unauthorized
-      }
-      return [];
-    },
-
-    /** Lists entities in one workspace using manage_entity (with optional search filter). */
-    async listEntities(
-      context: string | null,
-      workspace: string,
-      options: { search?: string; entity_type?: string; limit?: number } = {},
-    ): Promise<EntityHit[]> {
-      try {
-        const result = (await request(context, `/api/${encodeURIComponent(workspace)}/manage_entity`, {
-          action: "list",
-          ...options,
-        })) as { entities?: { id: number; name: string; slug?: string; entity_type?: string; type?: string; workspace_slug?: string }[] };
-        if (Array.isArray(result.entities)) {
-          return result.entities
-            .filter((e) => typeof e.id === "number" && typeof e.name === "string")
-            .map((e) => ({
-              id: e.id,
-              name: e.name,
-              slug: e.slug ?? e.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-              type: e.entity_type ?? e.type ?? options.entity_type ?? "entity",
-              workspace: e.workspace_slug ?? workspace,
-              url: null,
-            }));
-        }
-      } catch {
-        // manage_entity list error
-      }
-      return [];
-    },
-
-    /** Creates an entity in one workspace; returns the created entity details. */
-    async createEntity(
-      context: string | null,
-      workspace: string,
-      input: { entity_type: string; name: string; slug?: string; content?: string; metadata?: Record<string, unknown> },
-    ): Promise<EntityHit> {
-      const sanitizedSlug = input.slug
-        ? input.slug
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/^-+|-+$/g, "")
-            .slice(0, 50)
-        : undefined;
-      const result = (await request(context, `/api/${encodeURIComponent(workspace)}/manage_entity`, {
-        action: "create",
-        ...input,
-        ...(sanitizedSlug ? { slug: sanitizedSlug } : {}),
-      })) as { entity?: { id: number; name: string; slug: string; entity_type?: string; type?: string; workspace_slug?: string }; error?: string };
-      if (!result.entity || typeof result.entity.id !== "number") {
-        throw new Error(result.error ?? "Failed to create entity");
-      }
-      const e = result.entity;
-      return {
-        id: e.id,
-        name: e.name,
-        slug: e.slug,
-        type: e.entity_type ?? e.type ?? input.entity_type,
-        workspace: e.workspace_slug ?? workspace,
-        url: null,
-      };
     },
 
     /** Recent current saved memories (platform=lobu) in one workspace, newest first. */

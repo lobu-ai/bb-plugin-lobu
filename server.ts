@@ -56,6 +56,7 @@ import {
   THREAD_LOGS_KEY,
 } from "./lib/memory-store";
 import { discoverWorkspaces, savedEventsPath, type WorkspaceOwner } from "./lib/workspaces";
+import { describeUnlinked, entityRefsOf, githubRepoOf, nameAppearsIn } from "./lib/entity-links";
 import {
   RECAP_SOURCE_KEY,
   RECAP_TITLE_KEY,
@@ -73,6 +74,8 @@ const RECAP_TIMEOUT_MS = 10 * 60_000;
 const OWNERS_MS = 5 * 60_000;
 /** A search hit this close to a new memory means Lobu already holds it. */
 const DUPLICATE_SIMILARITY = 0.92;
+/** Explicit entity ids checked per memory. */
+const MAX_EXPLICIT_ENTITY_IDS = 10;
 /** Where a login lives when the CLI is too old to list its contexts. */
 const DEFAULT_ORIGIN = "https://app.lobu.ai";
 /** The CLI's built-in context for Lobu Cloud. */
@@ -388,31 +391,8 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   const projectNames = new Map<string, string>();
-  const projectEntityCache = new Map<string, EntityHit | null>();
-
-  async function resolveProjectEntity(projectId: string, projectName: string): Promise<EntityHit | null> {
-    if (projectEntityCache.has(projectId)) return projectEntityCache.get(projectId)!;
-    if (!projectName || projectName === "this project" || projectName === "Personal") {
-      projectEntityCache.set(projectId, null);
-      return null;
-    }
-    try {
-      const hits = await findEntities(projectId, projectName, 5);
-      if (hits.length === 0) {
-        projectEntityCache.set(projectId, null);
-        return null;
-      }
-      const norm = projectName.trim().toLowerCase();
-      const match =
-        hits.find((h) => h.name.toLowerCase() === norm || h.slug.toLowerCase() === norm) ??
-        hits.find((h) => h.name.toLowerCase().includes(norm) || norm.includes(h.name.toLowerCase())) ??
-        hits[0];
-      projectEntityCache.set(projectId, match);
-      return match;
-    } catch {
-      return null;
-    }
-  }
+  /** Each bb project's git remote, which names its repository. */
+  const projectRemotes = new Map<string, string | null>();
 
   const bbTabCache = new Map<string, { title: string; url: string }>();
 
@@ -471,12 +451,11 @@ export default async function plugin(bb: BbPluginApi) {
     // The personal project holds threads started with "Don't work in a project".
     const projects = await bb.sdk.projects.list({ includePersonal: true });
     projectNames.clear();
-    for (const project of projects) projectNames.set(project.id, project.name);
-    void Promise.allSettled(
-      projects
-        .filter((p) => p.name && p.name !== "Personal")
-        .map((p) => resolveProjectEntity(p.id, p.name)),
-    );
+    projectRemotes.clear();
+    for (const project of projects) {
+      projectNames.set(project.id, project.name);
+      projectRemotes.set(project.id, project.gitRemoteUrl ?? null);
+    }
   }
   void refreshProjects().catch((cause: unknown) => bb.log.warn(`Lobu could not list bb projects: ${String(cause)}`));
 
@@ -580,24 +559,21 @@ export default async function plugin(bb: BbPluginApi) {
     const learned = learnedFor(projectId, memory.saved, workspace, knownPersonalSlug).filter(
       (record) => !pinned.has(record.eventId),
     );
-    const projectEntity = projectEntityCache.get(projectId) ?? null;
-    if (projectEntity === null && !projectEntityCache.has(projectId)) {
-      void resolveProjectEntity(projectId, name);
-    }
+    const remote = projectRemotes.get(projectId) ?? null;
+    const projectRepo = remote === null ? null : githubRepoOf(remote);
     const activeTab = activeBrowserTab(threadId);
     return {
       name,
       workspace,
       pins,
       learned,
-      projectEntity,
       activeTab,
       brief: briefFor({
         projectName: name,
         linkedWorkspace: workspace,
         pins,
         learned,
-        projectEntity,
+        projectRepo,
         activeTab: activeTab ? { title: activeTab.title, url: activeTab.url } : null,
       }),
     };
@@ -644,10 +620,12 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   /** Searches memories and entities in the personal workspace and the project's linked one. */
+  /** `keepEntity` filters entities before the limit, so a kept match is never crowded out by dropped ones. */
   async function findMemoriesAndEntities(
     projectId: string | null,
     query: string,
     limit: number,
+    keepEntity: (entity: EntityHit) => boolean = () => true,
   ): Promise<SearchResults> {
     const owners = await memoryOwners();
     const targets = new Set<string>();
@@ -676,7 +654,7 @@ export default async function plugin(bb: BbPluginApi) {
     }
     return {
       hits: [...bestHits.values()].sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0)).slice(0, limit),
-      entities: [...bestEntities.values()].slice(0, limit),
+      entities: [...bestEntities.values()].filter(keepEntity).slice(0, limit),
     };
   }
 
@@ -698,6 +676,8 @@ export default async function plugin(bb: BbPluginApi) {
     saved: SavedRecord[];
     duplicates: { title: string; existing: MemoryHit }[];
     failed: { title: string; error: string }[];
+    /** Why mentions or explicit ids were not linked, for the agent. */
+    unlinked: string[];
   }
 
   async function listSessionTabs(threadId: string | null): Promise<{ title: string; url: string }[]> {
@@ -734,241 +714,51 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
-  const workspaceEntityTypesCache = new Map<string, string[]>();
-  const entityCacheByName = new Map<string, EntityHit | null>();
-
-  function sanitizeSlug(raw: string): string {
-    const s = raw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-    return s.slice(0, 50) || "entity";
+  /** The "owner/repo" a bb project's git remote names, or null. */
+  async function projectRepoOf(projectId: string | null): Promise<string | null> {
+    if (projectId === null) return null;
+    if (!projectRemotes.has(projectId)) await refreshProjects().catch(() => undefined);
+    const remote = projectRemotes.get(projectId) ?? null;
+    return remote === null ? null : githubRepoOf(remote);
   }
 
-  async function resolveAvailableEntityType(
-    context: string | null,
+  /** The ids among `ids` that name a record in this workspace; platform records ($member, ...) are never linked. */
+  async function entityIdsIn(owner: WorkspaceOwner, workspace: string, ids: readonly number[]): Promise<number[]> {
+    const checked = await Promise.all(
+      [...new Set(ids)].slice(0, MAX_EXPLICIT_ENTITY_IDS).map(async (id) => {
+        try {
+          const [entity] = entitiesFromSearch(await api.readEntity(owner.context, workspace, id), "", workspace);
+          return entity?.id === id && entity.workspace === workspace && !entity.type.startsWith("$") ? id : null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return checked.filter((id): id is number => id !== null);
+  }
+
+  /**
+   * The explicit entity ids of each draft that are records in the workspace it
+   * is saved to, and a line for each one that is not. Mentions are linked by
+   * Lobu itself, by exact name, when the memory is saved.
+   */
+  async function confirmedEntityIds(
+    owner: WorkspaceOwner,
     workspace: string,
-    preferred: string,
-    fallback = "product",
-  ): Promise<string> {
-    if (!workspaceEntityTypesCache.has(workspace)) {
-      const types = await api.listEntityTypes(context, workspace).catch(() => []);
-      workspaceEntityTypesCache.set(workspace, types.length > 0 ? types : ["product", "repository", "document"]);
-    }
-    const available = workspaceEntityTypesCache.get(workspace) ?? [];
-    if (available.length === 0) return preferred;
-    if (available.includes(preferred)) return preferred;
-    if (available.includes(fallback)) return fallback;
-    return available[0] ?? preferred;
-  }
-
-  async function ensureEntity(
-    projectId: string | null,
-    spec: { name: string; slug?: string; preferredType?: string; metadata?: Record<string, unknown> },
-  ): Promise<EntityHit | null> {
-    const name = spec.name.trim();
-    if (!name || name.length < 2) return null;
-    const slug = sanitizeSlug(spec.slug ?? name);
-    const cacheKey = `${projectId ?? "global"}:${slug}`;
-    if (entityCacheByName.has(cacheKey)) return entityCacheByName.get(cacheKey)!;
-
-    // 1. Search existing entities (semantic search + exact matching)
-    try {
-      const hits = await findEntities(projectId, name, 5);
-      const exact = hits.find(
-        (h) => h.name.toLowerCase() === name.toLowerCase() || h.slug.toLowerCase() === slug.toLowerCase(),
-      );
-      if (exact) {
-        entityCacheByName.set(cacheKey, exact);
-        return exact;
-      }
-    } catch {
-      // Best-effort search
-    }
-
-    // 2. Also search via direct entity list if possible
-    try {
-      const owners = await memoryOwners();
-      const personal = personalOf(owners);
-      if (personal) {
-        const directList = await api.listEntities(personal.owner.context, personal.slug, { search: name, limit: 5 });
-        const exact = directList.find(
-          (h) => h.name.toLowerCase() === name.toLowerCase() || h.slug.toLowerCase() === slug.toLowerCase(),
-        );
-        if (exact) {
-          entityCacheByName.set(cacheKey, exact);
-          return exact;
+    drafts: readonly MemoryDraft[],
+  ): Promise<{ ids: number[][]; unlinked: string[] }> {
+    const unlinked: string[] = [];
+    const ids = await Promise.all(
+      drafts.map(async (draft) => {
+        const explicit = draft.entityIds ?? [];
+        const valid = await entityIdsIn(owner, workspace, explicit);
+        for (const id of explicit) {
+          if (!valid.includes(id)) unlinked.push(`entity id ${id}: not a record in the ${workspace} workspace; not linked.`);
         }
-      }
-    } catch {
-      // Best-effort list
-    }
-
-    // 3. Not found: auto-create in user's personal Lobu workspace
-    try {
-      const owners = await memoryOwners();
-      const personal = personalOf(owners);
-      if (!personal) return null;
-
-      const entityType = await resolveAvailableEntityType(
-        personal.owner.context,
-        personal.slug,
-        spec.preferredType ?? "product",
-        "product",
-      );
-
-      const created = await api.createEntity(personal.owner.context, personal.slug, {
-        entity_type: entityType,
-        name,
-        slug,
-        metadata: spec.metadata,
-      });
-      entityCacheByName.set(cacheKey, created);
-      return created;
-    } catch (cause) {
-      bb.log.warn(`Could not auto-create entity ${name}: ${String(cause)}`);
-      return null;
-    }
-  }
-
-  async function ensureProjectEntity(projectId: string, projectName: string): Promise<EntityHit | null> {
-    if (!projectName || projectName === "this project" || projectName === "Personal") return null;
-    const existing = await resolveProjectEntity(projectId, projectName);
-    if (existing !== null) return existing;
-    const created = await ensureEntity(projectId, {
-      name: projectName,
-      slug: projectId,
-      preferredType: "product",
-    });
-    if (created) projectEntityCache.set(projectId, created);
-    return created;
-  }
-
-  async function discoverSessionEntities(
-    threadId: string | null,
-    projectId: string | null,
-    extraText: string,
-  ): Promise<{ entityIds: number[]; entities: EntityHit[]; sessionTabs: { title: string; url: string }[] }> {
-    const sessionTabs = await listSessionTabs(threadId);
-    const discoveredIds = new Set<number>();
-    const discoveredEntities: EntityHit[] = [];
-
-    const addEntity = (entity: EntityHit | null) => {
-      if (!entity) return;
-      if (!discoveredIds.has(entity.id)) {
-        discoveredIds.add(entity.id);
-        discoveredEntities.push(entity);
-      }
-    };
-
-    // 1. Project Entity (auto-resolved or auto-created if missing)
-    if (projectId) {
-      const projectName = projectNames.get(projectId) ?? "";
-      const pEntity = projectEntityCache.get(projectId) ?? (await ensureProjectEntity(projectId, projectName));
-      addEntity(pEntity);
-    }
-
-    // 2. Open Tabs in Session: Look for GitHub repos, app URLs, docs, or tools
-    for (const tab of sessionTabs) {
-      try {
-        const parsed = new URL(tab.url);
-        if (parsed.hostname === "github.com") {
-          const parts = parsed.pathname.split("/").filter(Boolean);
-          if (parts.length >= 2) {
-            const owner = parts[0];
-            const repoSlug = parts[1];
-            const repoName = `${owner}/${repoSlug}`;
-
-            // Check existing entities matching repo slug or name
-            const hits = await findEntities(projectId, repoSlug, 3);
-            for (const h of hits) addEntity(h);
-
-            // Ensure specific repository entity exists
-            const repoEntity = await ensureEntity(projectId, {
-              name: repoName,
-              slug: repoSlug,
-              preferredType: "repository",
-              metadata: { url: tab.url, origin: "github", owner, repo: repoSlug },
-            });
-            addEntity(repoEntity);
-          }
-        } else if (tab.title && tab.title.length > 2) {
-          const cleanTitle = tab.title
-            .replace(/\s*[-—|]\s*(Google Chrome|Arc|Safari|Brave|Firefox|Linear|GitHub)$/i, "")
-            .trim();
-          if (
-            cleanTitle.length > 2 &&
-            !cleanTitle.toLowerCase().includes("untitled") &&
-            parsed.protocol.startsWith("http")
-          ) {
-            const hits = await findEntities(projectId, cleanTitle.slice(0, 40), 2);
-            for (const h of hits) addEntity(h);
-
-            if (hits.length === 0) {
-              const docEntity = await ensureEntity(projectId, {
-                name: cleanTitle,
-                slug: sanitizeSlug(cleanTitle),
-                preferredType: "document",
-                metadata: { url: tab.url, hostname: parsed.hostname },
-              });
-              addEntity(docEntity);
-            }
-          }
-        }
-      } catch {
-        // Invalid URL
-      }
-    }
-
-    // 3. Transcript Context: inspect conversation turns for repos, services, and topics
-    if (threadId && threadId !== "cli") {
-      try {
-        const transcript = await readTranscript(threadId);
-        if (transcript && transcript.text) {
-          // Extract GitHub repo mentions (e.g. github.com/owner/repo)
-          const ghMatches = transcript.text.matchAll(/github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)/g);
-          for (const match of ghMatches) {
-            const owner = match[1];
-            const repoSlug = match[2];
-            const hits = await findEntities(projectId, repoSlug, 2);
-            for (const h of hits) addEntity(h);
-            const hit = await ensureEntity(projectId, {
-              name: `${owner}/${repoSlug}`,
-              slug: repoSlug,
-              preferredType: "repository",
-              metadata: { origin: "github", owner, repo: repoSlug },
-            });
-            addEntity(hit);
-          }
-
-          // Search recent transcript turns for discussed entities
-          const sample = transcript.text.slice(-3000);
-          const turns = sample.split("\n\n").filter((t) => t.trim().length > 10).slice(-4);
-          for (const turn of turns) {
-            const query = turn.replace(/[^\w\s-]/g, " ").slice(0, 80).trim();
-            if (query.length > 4) {
-              const hits = await findEntities(projectId, query, 2);
-              for (const h of hits) addEntity(h);
-            }
-          }
-        }
-      } catch {
-        // Transcript reading is best-effort
-      }
-    }
-
-    // 4. Also check extraText (memory proposal text) for entity matches
-    if (extraText) {
-      try {
-        const hits = await findEntities(projectId, extraText.slice(0, 80), 3);
-        for (const h of hits) addEntity(h);
-      } catch {
-        // Search is best-effort
-      }
-    }
-
-    return {
-      entityIds: [...discoveredIds],
-      entities: discoveredEntities,
-      sessionTabs,
-    };
+        return valid;
+      }),
+    );
+    return { ids, unlinked: [...new Set(unlinked)] };
   }
 
   /** Saves drafts straight to the personal workspace, skipping what Lobu already holds. Null without a personal workspace. */
@@ -977,17 +767,14 @@ export default async function plugin(bb: BbPluginApi) {
     const personal = personalOf(owners);
     if (personal === null) return null;
     const { origin: baseUrl } = await reachLobu();
-    const outcome: AutoSaveOutcome = { workspace: personal.slug, saved: [], duplicates: [], failed: [] };
+    const outcome: AutoSaveOutcome = { workspace: personal.slug, saved: [], duplicates: [], failed: [], unlinked: [] };
     const replacements: { replacedEventId?: number | null; record: SavedRecord }[] = [];
-
+    // The brief that follows a save shows the thread's current browser tab.
     await refreshBbBrowserTab(threadId);
-    const sessionDiscovery = await discoverSessionEntities(
-      threadId,
-      projectId,
-      drafts.map((d) => `${d.title} ${d.content}`).join("\n"),
-    );
+    const links = await confirmedEntityIds(personal.owner, personal.slug, drafts);
+    const unlinked = new Set(links.unlinked);
 
-    for (const draft of drafts) {
+    for (const [index, draft] of drafts.entries()) {
       try {
         const rawNear = await api.searchMemory(personal.owner.context, personal.slug, `${draft.title}\n${draft.content}`, 10);
         const near = hitsFromSearch(rawNear, baseUrl).find(
@@ -997,28 +784,18 @@ export default async function plugin(bb: BbPluginApi) {
           outcome.duplicates.push({ title: draft.title, existing: near });
           continue;
         }
-
-        const explicitEntityIds = draft.entityIds && draft.entityIds.length > 0 ? draft.entityIds : [];
-        const finalEntityIds: number[] = [...explicitEntityIds];
-        if (finalEntityIds.length === 0) {
-          for (const id of sessionDiscovery.entityIds) {
-            if (!finalEntityIds.includes(id)) finalEntityIds.push(id);
-          }
-          const matchedEntities = entitiesFromSearch(rawNear, baseUrl, personal.slug);
-          for (const ent of matchedEntities) {
-            if (!finalEntityIds.includes(ent.id)) finalEntityIds.push(ent.id);
-          }
-        }
-        const entityIdsToSend = finalEntityIds.length > 0 ? finalEntityIds : undefined;
+        const confirmed = { ...draft, entityIds: links.ids[index] ?? [] };
+        const refs = entityRefsOf(confirmed.entityIds, draft.mentions ?? []);
 
         const saved = await api.saveMemory(personal.owner.context, personal.slug, {
           title: draft.title,
           content: draft.content,
           semantic_type: draft.kind,
-          idempotency_key: idempotencyKey(threadId, personal.slug, { ...draft, entityIds: entityIdsToSend }),
+          idempotency_key: idempotencyKey(threadId, personal.slug, confirmed),
           ...(draft.replacesEventId ? { supersedes_event_id: draft.replacesEventId } : {}),
-          ...(entityIdsToSend ? { entity_ids: entityIdsToSend } : {}),
+          ...(refs.length > 0 ? { entity_ids: refs } : {}),
         });
+        for (const line of describeUnlinked(saved.unlinked)) unlinked.add(line);
         const record: SavedRecord = {
           eventId: saved.id,
           workspace: personal.slug,
@@ -1028,7 +805,7 @@ export default async function plugin(bb: BbPluginApi) {
           url: absoluteUrl(saved.viewUrl, baseUrl),
           threadId,
           projectId,
-          entityIds: entityIdsToSend ?? null,
+          entityIds: saved.entityIds.length > 0 ? saved.entityIds : null,
           savedAt: Date.now(),
           uses: 0,
           lastUsedAt: null,
@@ -1040,6 +817,7 @@ export default async function plugin(bb: BbPluginApi) {
       }
     }
     rememberWithReplacements(replacements);
+    outcome.unlinked = [...unlinked];
     return outcome;
   }
 
@@ -1057,6 +835,9 @@ export default async function plugin(bb: BbPluginApi) {
       for (const duplicate of outcome.duplicates) lines.push(`- ${duplicate.title} (matches "${duplicate.existing.title}")`);
     }
     for (const failure of outcome.failed) lines.push(`Not saved: ${failure.title} (${failure.error})`);
+    if (outcome.saved.length > 0 && outcome.unlinked.length > 0) {
+      lines.push("Left unlinked:", ...outcome.unlinked.map((line) => `- ${line}`));
+    }
     if (outcome.saved.length > 0) {
       lines.push(
         "In your reply, tell the user in one short line what you saved to Lobu. They can undo or pin it from the thread's Lobu memory panel.",
@@ -1115,19 +896,12 @@ export default async function plugin(bb: BbPluginApi) {
     const owner = owners.get(submission.workspace);
     if (owner === undefined) throw new Error(`Unknown workspace ${submission.workspace}`);
     const projectId = await projectOfThread(threadId);
-    const sessionDiscovery = await discoverSessionEntities(
-      threadId,
-      projectId,
-      submission.memories.map((m) => `${m.title} ${m.content}`).join("\n"),
-    );
-    if (sessionDiscovery.entityIds.length > 0) {
-      for (const m of submission.memories) {
-        if (!m.entityIds || m.entityIds.length === 0) {
-          m.entityIds = [...sessionDiscovery.entityIds];
-        }
-      }
-    }
-    const outcome = await saveMemories(api, owner, (await reachLobu()).origin, threadId, submission);
+    const links = await confirmedEntityIds(owner, submission.workspace, submission.memories);
+    submission.memories.forEach((memoryDraft, index) => {
+      memoryDraft.entityIds = links.ids[index] ?? [];
+    });
+    const saved = await saveMemories(api, owner, (await reachLobu()).origin, threadId, submission);
+    const outcome = { ...saved, unlinked: [...new Set([...links.unlinked, ...saved.unlinked])] };
     await bb.storage.kv.set(PREFERRED_WORKSPACE, submission.workspace);
     const now = Date.now();
     rememberWithReplacements(
@@ -1146,7 +920,7 @@ export default async function plugin(bb: BbPluginApi) {
               url: saved.url,
               threadId,
               projectId,
-              entityIds: saved.entityIds ?? memoryDraft.entityIds ?? null,
+              entityIds: saved.entityIds ?? null,
               savedAt: now,
               uses: 0,
               lastUsedAt: null,
@@ -1244,7 +1018,7 @@ export default async function plugin(bb: BbPluginApi) {
       visibility: "hidden",
       title: `Lobu recap: ${title}`,
       pluginMetadata: { [RECAP_SOURCE_KEY]: thread.id, [RECAP_TITLE_KEY]: title },
-      prompt: recapPrompt(title, transcript.text + tabsNote),
+      prompt: recapPrompt(title, transcript.text + tabsNote, await projectRepoOf(thread.projectId)),
     });
     await finishRecap(worker.id);
   }
@@ -1320,7 +1094,10 @@ export default async function plugin(bb: BbPluginApi) {
   ): Promise<{ connected: boolean; hits: MemoryHit[]; text: string }> {
     if ((await memoryOwners()).size === 0) return { connected: false, hits: [], text: NOT_CONNECTED };
     const projectId = ctx.projectId ?? (ctx.threadId === null ? null : await projectOfThread(ctx.threadId));
-    const { hits, entities } = await findMemoriesAndEntities(projectId, query, limit);
+    // Fuzzy name matches ("Hande" for "Hand off") would invite wrong links; list only entities the query names.
+    const found = await findMemoriesAndEntities(projectId, query, limit, (entity) => nameAppearsIn(entity.name, query));
+    const hits = found.hits;
+    const entities = found.entities;
     const now = Date.now();
     if (ctx.threadId !== null) {
       memory.logs = capThreadLogs({ ...memory.logs, [ctx.threadId]: addSearch(memory.logs[ctx.threadId], { query, at: now, results: hits }) });
@@ -1906,7 +1683,7 @@ export default async function plugin(bb: BbPluginApi) {
     description:
       "Save memories worth keeping to the user's Lobu memory. With the user's auto-save setting on, they go straight to the personal workspace and the user can undo them; otherwise the user reviews them in a form first.",
     instructions:
-      "When a task leaves something worth keeping across sessions, call lobu_remember once at the end with at most three short, self-contained memories. Propose one only if a different agent, on a different task next month, would act differently because of it: a decision, a non-obvious fact or gotcha, or a preference the user stated as a standing rule. Most tasks contain nothing worth keeping; then do not call the tool. Never propose what the task built or changed, anything the repo or code already states, generic quality wishes, task requirements, or one-off values. Each memory needs a short evidence quote of the turn or finding it came from. Never include secrets, credentials, or temporary state. Name the workspace a memory belongs to when it is team knowledge rather than the user's own. The memory system automatically inspects the session transcript and open browser tabs to discover, link, or create relevant Lobu entities (projects, repos, documents). You can also explicitly pass entity IDs in entityIds when known. When correcting an outdated memory shown in the brief or returned by lobu_search, pass its event id as replacesEventId so the stale memory is superseded instead of keeping both. Use lobu_remember rather than other memory-saving tools, so the user can see and undo what was saved. If lobu_remember is not in your tool list, run `bb lobu remember --title ... --content ... --kind ... --evidence ...` (with `--replaces-id <id>` when replacing an older memory, `--entity-ids <id,id>` when linking entities).",
+      "When a task leaves something worth keeping across sessions, call lobu_remember once at the end with at most three short, self-contained memories. Propose one only if a different agent, on a different task next month, would act differently because of it: a decision, a non-obvious fact or gotcha, or a preference the user stated as a standing rule. The user saying a rule is its evidence: save it without asking them to prove it or confirm the people in it. Most tasks contain nothing worth keeping; then do not call the tool. Never propose what the task built or changed, anything the repo or code already states, generic quality wishes, task requirements, or one-off values. Each memory needs a short evidence quote of the turn or finding it came from. Never include secrets, credentials, or temporary state. Name the workspace a memory belongs to when it is team knowledge rather than the user's own. In mentions, list the full names of the specific people, companies, products, or repositories (as owner/repo) a memory is about, not tools or concepts it only uses; mention this project's own repository only when the memory is about that codebase or product; a mention is linked only when exactly one Lobu record has that exact name, and the result says which stayed unlinked and why. Pass entityIds only for records you confirmed are the ones the memory is about. When correcting an outdated memory shown in the brief or returned by lobu_search, pass its event id as replacesEventId so the stale memory is superseded instead of keeping both. Use lobu_remember rather than other memory-saving tools, so the user can see and undo what was saved. If lobu_remember is not in your tool list, run `bb lobu remember --title ... --content ... --kind ... --evidence ...` (with `--replaces-id <id>` when replacing an older memory, `--mentions \"Full Name,owner/repo\"` for what it is about, `--entity-ids <id,id>` for confirmed records).",
     presentation: {
       label: { pending: "Saving memories to Lobu", completed: "Lobu memory" },
       icon: { glyph: "lobu/memory" },
@@ -2041,7 +1818,12 @@ export default async function plugin(bb: BbPluginApi) {
             "entity-ids": {
               type: "string",
               aliases: ["entity-id"],
-              description: "Comma-separated Lobu entity IDs to associate with this memory",
+              description: "Comma-separated Lobu entity IDs confirmed to be what this memory is about",
+            },
+            mentions: {
+              type: "string",
+              aliases: ["mention"],
+              description: "Comma-separated full names (or owner/repo) this memory is about; each links only on a unique exact match",
             },
             json: {
               type: "boolean",
@@ -2064,6 +1846,12 @@ export default async function plugin(bb: BbPluginApi) {
               workspace: options.workspace ?? null,
               replacesEventId: options["replaces-id"] ?? null,
               entityIds: entityIds && entityIds.length > 0 ? entityIds : null,
+              mentions: options.mentions
+                ? options.mentions
+                    .split(",")
+                    .map((name) => name.trim())
+                    .filter((name) => name !== "")
+                : null,
             });
             if (!parsed.success) {
               const issue = parsed.error.issues[0];

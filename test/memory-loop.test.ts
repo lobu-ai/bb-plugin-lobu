@@ -40,7 +40,15 @@ const lobu = {
   connections: [] as Record<string, unknown>[],
   devices: [] as Record<string, unknown>[],
   tabs: [] as Record<string, unknown>[],
-  entities: [] as { id: number; name: string; slug: string; type: string; workspace: string; metadata?: unknown }[],
+  // The default project's repository record; the project's git remote names it.
+  entities: [{ id: 4242, name: "acme/acme-app", slug: "acme-app", type: "product", workspace: "me" }] as {
+    id: number;
+    name: string;
+    slug: string;
+    type: string;
+    workspace: string;
+    metadata?: unknown;
+  }[],
   failFeeds: false,
   failDevices: false,
   nextId: 1000,
@@ -110,7 +118,19 @@ beforeAll(() => {
       const body = (await request.json()) as Record<string, unknown>;
       if (tool === "save_memory") {
         const supersedesId = typeof body.supersedes_event_id === "number" ? body.supersedes_event_id : null;
-        const entityIds = Array.isArray(body.entity_ids) ? (body.entity_ids as number[]) : [];
+        // Like Lobu: an id links as given, a name links when exactly one non-system
+        // record in the workspace has it (case-insensitive), and the rest come back.
+        const refs = Array.isArray(body.entity_ids) ? (body.entity_ids as (number | { name: string })[]) : [];
+        const unlinked: { name: string; reason: string }[] = [];
+        const entityIds = refs.flatMap((ref) => {
+          if (typeof ref === "number") return [ref];
+          const named = lobu.entities.filter(
+            (e) => e.workspace === workspace && !e.type.startsWith("$") && e.name.toLowerCase() === ref.name.toLowerCase(),
+          );
+          if (named.length === 1) return [named[0]!.id];
+          unlinked.push({ name: ref.name, reason: named.length === 0 ? "not_found" : "ambiguous" });
+          return [];
+        });
         if (supersedesId !== null) {
           const target = lobu.memories.find((m) => m.id === supersedesId && m.workspace === workspace);
           if (target === undefined) return Response.json({ error: `Cannot supersede event ${supersedesId}` }, { status: 404 });
@@ -129,7 +149,7 @@ beforeAll(() => {
             deleted: false,
             supersededBy: null,
           });
-          return Response.json({ id, view_url: `/${workspace}/events/${id}` });
+          return Response.json({ id, view_url: `/${workspace}/events/${id}`, entity_ids: entityIds, unlinked });
         }
         const id = lobu.nextId++;
         lobu.memories.push({
@@ -142,10 +162,19 @@ beforeAll(() => {
           deleted: false,
           supersededBy: null,
         });
-        return Response.json({ id, view_url: `/${workspace}/events/${id}` });
+        return Response.json({ id, view_url: `/${workspace}/events/${id}`, entity_ids: entityIds, unlinked });
       }
       if (tool === "search_memory") {
         if (typeof body.entity_id === "number") {
+          const known = lobu.entities.find((e) => e.id === body.entity_id);
+          if (known !== undefined) {
+            return Response.json({
+              entity:
+                known.workspace === workspace
+                  ? { id: known.id, type: known.type, name: known.name, slug: known.slug, workspace_slug: workspace }
+                  : null,
+            });
+          }
           return Response.json({
             entity: {
               id: body.entity_id,
@@ -175,9 +204,24 @@ beforeAll(() => {
             workspace_slug: m.workspace,
             entity_ids: m.entityIds,
           }));
-        const matches = query.toLowerCase().includes("acme")
+        const matches: Record<string, unknown>[] = query.toLowerCase().includes("acme")
           ? [{ id: 42, type: "company", name: "Acme Corp", slug: "acme-corp", workspace_slug: workspace }]
           : [];
+        // Like Lobu's trigram name search: any shared 4-letter run is a fuzzy match.
+        const grams = (text: string) => {
+          const out = new Set<string>();
+          for (const word of text.toLowerCase().split(/[^a-z0-9]+/)) {
+            for (let i = 0; i + 4 <= word.length; i += 1) out.add(word.slice(i, i + 4));
+          }
+          return out;
+        };
+        const queryGrams = grams(query);
+        for (const e of lobu.entities) {
+          if (e.workspace !== workspace) continue;
+          const exact = e.name.toLowerCase() === query.toLowerCase();
+          if (!exact && ![...grams(e.name)].some((g) => queryGrams.has(g))) continue;
+          matches.push({ id: e.id, type: e.type, name: e.name, slug: e.slug, workspace_slug: workspace, match_score: exact ? 1 : 0.31 });
+        }
         return Response.json({ content, matches });
       }
       if (tool === "read_knowledge") {
@@ -290,57 +334,6 @@ beforeAll(() => {
           automations: lobu.automations.filter((a) => a.workspace === workspace),
         });
       }
-      if (tool === "manage_entity_schema" && body.action === "list") {
-        return Response.json({
-          schema_type: "entity_type",
-          action: "list",
-          entity_types: [
-            { slug: "product", name: "Product" },
-            { slug: "repository", name: "Repository" },
-            { slug: "document", name: "Document" },
-          ],
-        });
-      }
-      if (tool === "manage_entity") {
-        if (body.action === "create") {
-          const id = lobu.nextId++;
-          const name = String(body.name);
-          const entityType = String(body.entity_type);
-          const slug = String(body.slug ?? name.toLowerCase().replace(/\s+/g, "-"));
-          const ent = {
-            id,
-            name,
-            slug,
-            entity_type: entityType,
-            type: entityType,
-            workspace_slug: workspace,
-          };
-          lobu.entities.push({ id, name, slug, type: entityType, workspace, metadata: body.metadata });
-          return Response.json({
-            action: "create",
-            entity: ent,
-          });
-        }
-        if (body.action === "list") {
-          const search = typeof body.search === "string" ? body.search.toLowerCase() : "";
-          const matched = lobu.entities.filter(
-            (e) =>
-              e.workspace === workspace &&
-              (!search || e.name.toLowerCase().includes(search) || (e.slug && e.slug.toLowerCase().includes(search))),
-          );
-          return Response.json({
-            action: "list",
-            entities: matched.map((e) => ({
-              id: e.id,
-              name: e.name,
-              slug: e.slug,
-              entity_type: e.type,
-              type: e.type,
-              workspace_slug: e.workspace,
-            })),
-          });
-        }
-      }
       if (tool === "run_sdk") {
         const ids = JSON.parse(String(body.script).match(/delete\((\{.*\})\)/)?.[1] ?? "{}").content_ids as number[];
         for (const m of lobu.memories) if (ids.includes(m.id) && m.workspace === workspace) m.deleted = true;
@@ -422,7 +415,7 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
       },
     },
     sdk: {
-      projects: { list: async () => [{ id: "proj-1", name: "Acme app" }] },
+      projects: { list: async () => [{ id: "proj-1", name: "Acme app", gitRemoteUrl: "https://github.com/acme/acme-app.git" }] },
       threads: {
         get: async () => ({ projectId: "proj-1" }),
         list: async () => [],
@@ -462,9 +455,9 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
   await new Promise((resolve) => setTimeout(resolve, 20));
   const call = (name: string, params: unknown, threadId = "thread-1", projectId = "proj-1") =>
     tools.get(name)!.execute(params, { threadId, projectId, signal: new AbortController().signal });
-  const runCli = (argv: string[], threadId = "thread-1") =>
-    cli!.run(argv, { threadId, projectId: "proj-1", signal: new AbortController().signal });
-  return { kv, rpc, call, runCli, formRequests, mentions: mentionProviders, brief: (threadId: string) => instructions!({ threadId, projectId: "proj-1" }) };
+  const runCli = (argv: string[], threadId = "thread-1", projectId = "proj-1") =>
+    cli!.run(argv, { threadId, projectId, signal: new AbortController().signal });
+  return { kv, rpc, call, runCli, formRequests, mentions: mentionProviders, brief: (threadId: string, projectId = "proj-1") => instructions!({ threadId, projectId }) };
 }
 
 /**
@@ -503,9 +496,10 @@ describe("the memory loop", () => {
     // Auto-save goes to the personal workspace.
     const saved = String(await call("lobu_remember", { memories: [deployGotcha, prPreference] }));
     expect(saved).toContain("Saved to the user's personal Lobu workspace (me)");
-    expect(saved).toContain("[entities: 42]");
+    // Neither memory names a record, so neither is linked; not even to the project's repo.
+    expect(saved).not.toContain("[entities:");
     expect(lobu.memories.filter((m) => m.workspace === "me")).toHaveLength(2);
-    expect(lobu.memories[0].entityIds).toEqual([42]);
+    expect(lobu.memories[0].entityIds ?? []).toEqual([]);
 
     // The same memories again are recognised as already in Lobu.
     const again = String(await call("lobu_remember", { memories: [deployGotcha] }, "thread-2"));
@@ -523,7 +517,7 @@ describe("the memory loop", () => {
     // A new thread in the project starts with what earlier threads learned.
     const text = brief("thread-3");
     expect(text).toContain("## Lobu memory for Acme app");
-    expect(text).toContain("Matched project entity: Acme Corp (id: 42, type: company)");
+    expect(text).toContain("Project repository: acme/acme-app");
     expect(text).toContain("Learned in earlier threads of this project:");
     expect(text).toContain(deployGotcha.title);
     const startLog = (await rpc.threadMemory!({ threadId: "thread-3" })) as { log: { given: unknown[] } };
@@ -976,7 +970,7 @@ describe("the memory loop", () => {
     const entSearch = byId("lobu-entity").search as (ctx: unknown) => Promise<{ id: string; title: string; subtitle?: string }[]>;
     const entResolve = byId("lobu-entity").resolve as (id: string) => Promise<{ context: string }>;
     const acmeEntities = await entSearch({ query: "acme", projectId: "proj-1" });
-    expect(acmeEntities.map((item) => item.id)).toEqual(["ent:me:42"]);
+    expect(acmeEntities.map((item) => item.id)).toEqual(["ent:me:42", "ent:me:4242"]);
     expect(acmeEntities[0]?.title).toBe("Acme Corp");
     expect(acmeEntities[0]?.subtitle).toBe("company · me");
     const entCtx = (await entResolve("ent:me:42")).context;
@@ -1068,146 +1062,127 @@ describe("the memory loop", () => {
     expect(text).toContain("Active browser tab: App Docs (http://localhost:3000/docs)");
   });
 
-  test("auto-creates missing project entity and links entities from open session tabs", async () => {
-    const { call } = await startPlugin({
-      sdk: {
-        projects: { list: async () => [{ id: "proj-beta", name: "Beta App" }] },
-        threads: {
-          get: async () => ({ projectId: "proj-beta" }),
-          list: async () => [],
-          getPluginMetadata: async () => ({}),
-        },
-        hosts: { list: async () => [{ id: "host-1" }] },
-        experimental_desktopBrowsers: {
-          listInstances: async () => ({ instances: [{ instanceId: "inst-1", generation: "gen-1" }] }),
-          listTabs: async () => ({
-            tabs: [
-              { tabId: "t-acme", url: "https://github.com/lobu-ai/acme-service", title: "acme-service repo", presentation: "reveal" },
-            ],
-          }),
-        },
-      },
-    });
-    const result = String(
-      await call(
-        "lobu_remember",
-        {
-          memories: [
-            {
-              title: "Beta App uses Postgres 16",
-              content: "The database for Beta App is Postgres 16 with pgvector.",
-              kind: "fact",
-              evidence: "Investigated db container configs",
-            },
-          ],
-        },
-        "thread-beta",
-        "proj-beta",
-      ),
-    );
-    expect(result).toContain("Saved to the user's personal Lobu workspace (me)");
-    // The auto-created Beta App entity ID and the Acme Corp (42) entity from the tab are linked!
-    const betaMem = lobu.memories.find((m) => m.title === "Beta App uses Postgres 16")!;
-    expect(betaMem).toBeDefined();
-    expect(betaMem.entityIds?.length).toBeGreaterThanOrEqual(1);
-    expect(betaMem.entityIds).toContain(42);
-    expect(lobu.entities.map((e) => e.slug)).toContain("proj-beta");
-  });
-
-  test("discovers transcript mentions and open tabs to auto-create and link entities in Lobu", async () => {
-    const { call } = await startPlugin({
-      sdk: {
-        projects: { list: async () => [{ id: "proj-gamma", name: "Gamma Platform" }] },
-        threads: {
-          get: async () => ({ projectId: "proj-gamma" }),
-          list: async () => [],
-          getPluginMetadata: async () => ({}),
-          events: {
-            list: async () => [
-              {
-                seq: 1,
-                type: "client/turn/requested",
-                data: {
-                  input: [
-                    {
-                      type: "text",
-                      text: "We are integrating with https://github.com/acme/payment-gateway for checkout flows.",
-                    },
-                  ],
+  test("links a memory only to exact, unambiguous mentions, its project's repo included", async () => {
+    // A realistic people graph: fuzzy name search turns "Hand off" into Hande,
+    // Handy and Handel, and "Dmitry" into every Dmitry. None of them may be linked.
+    const seeded = [
+      { id: 5001, name: "acme/payments", slug: "payments", type: "product", workspace: "me" },
+      { id: 5101, name: "Hande Örs", slug: "person-5101", type: "person", workspace: "me" },
+      { id: 5102, name: "Tristan Handy", slug: "person-5102", type: "person", workspace: "me" },
+      { id: 5103, name: "Nick Handel", slug: "person-5103", type: "person", workspace: "me" },
+      { id: 5104, name: "Dmitry Karpov", slug: "person-5104", type: "person", workspace: "me" },
+      { id: 5105, name: "Dmitry Sorokin", slug: "person-5105", type: "person", workspace: "me" },
+      { id: 5106, name: "Priya Raman", slug: "person-5106", type: "person", workspace: "me" },
+      { id: 5107, name: "Sam Rivera", slug: "person-5107", type: "person", workspace: "me" },
+      { id: 5108, name: "Sam Rivera", slug: "person-5108", type: "person", workspace: "me" },
+      { id: 5109, name: "Someone Example", slug: "member-5109", type: "$member", workspace: "me" },
+      { id: 5201, name: "Team Service", slug: "team-service", type: "product", workspace: "team" },
+    ];
+    lobu.entities.push(...seeded);
+    const entitiesBefore = lobu.entities.length;
+    try {
+      const { call, runCli, brief } = await startPlugin({
+        sdk: {
+          projects: {
+            list: async () => [{ id: "proj-pay", name: "Payments", gitRemoteUrl: "git@github.com:acme/payments.git" }],
+          },
+          threads: {
+            get: async () => ({ projectId: "proj-pay" }),
+            list: async () => [],
+            getPluginMetadata: async () => ({}),
+            events: {
+              list: async () => [
+                {
+                  seq: 1,
+                  type: "client/turn/requested",
+                  data: { input: [{ type: "text", text: "Hand off the stack to Dmitry; see https://github.com/acme/worker-service" }] },
                 },
+              ],
+            },
+          },
+          hosts: { list: async () => [{ id: "host-1" }] },
+          experimental_desktopBrowsers: {
+            listInstances: async () => ({ instances: [{ instanceId: "inst-1", generation: "gen-1" }] }),
+            listTabs: async () => ({
+              tabs: [
+                { tabId: "t1", url: "https://github.com/acme/worker-service", title: "worker-service", presentation: "reveal" },
+                { tabId: "t2", url: "https://stripe.com/docs/api", title: "Stripe API Documentation", presentation: "reveal" },
+              ],
+            }),
+          },
+        },
+      });
+      const text = String(
+        await call(
+          "lobu_remember",
+          {
+            memories: [
+              {
+                title: "Hand off BB stack state to Dmitry's agents through PR comments",
+                content: "Post the stack state as a PR comment so Dmitry's agents pick it up.",
+                kind: "preference",
+                evidence: "User: hand it off in the PR",
+                mentions: ["Dmitry", "Dmitry Nasikanov"],
               },
               {
-                seq: 2,
-                type: "item/completed",
-                data: {
-                  item: {
-                    type: "agentMessage",
-                    text: "Understood, https://github.com/acme/payment-gateway uses webhook signatures.",
-                  },
-                },
+                title: "Priya Raman owns the webhook signing keys",
+                content: "Ask Priya Raman before rotating webhook signing keys; Sam Rivera only reviews.",
+                kind: "fact",
+                evidence: "User: Priya owns the keys",
+                mentions: ["Priya Raman", "Sam Rivera", "Someone Example"],
+              },
+              {
+                title: "Payments webhooks retry for 24 hours",
+                content: "acme/payments retries failed webhook deliveries for 24 hours before dropping them.",
+                kind: "fact",
+                evidence: "Agent: found the retry window in the worker",
+                mentions: ["acme/payments"],
+              },
+              {
+                title: "Ops runbook lives with the platform team",
+                content: "The ops runbook for queue outages is kept by the platform team.",
+                kind: "fact",
+                evidence: "Agent: found the runbook owner",
+                entityIds: [5201],
               },
             ],
           },
-        },
-        hosts: { list: async () => [{ id: "host-1" }] },
-        experimental_desktopBrowsers: {
-          listInstances: async () => ({ instances: [{ instanceId: "inst-1", generation: "gen-1" }] }),
-          listTabs: async () => ({
-            tabs: [
-              {
-                tabId: "t-worker",
-                url: "https://github.com/acme/worker-service",
-                title: "worker-service repository",
-                presentation: "reveal",
-              },
-              {
-                tabId: "t-docs",
-                url: "https://stripe.com/docs/api",
-                title: "Stripe API Documentation - Google Chrome",
-                presentation: "reveal",
-              },
-            ],
-          }),
-        },
-      },
-    });
+          "thread-pay",
+          "proj-pay",
+        ),
+      );
+      const linksOf = (title: string) => [...(lobu.memories.find((m) => m.title === title)?.entityIds ?? [])].sort();
+      // A first name and a partial-name hit link nothing, and the project's repo is not linked unasked.
+      expect(linksOf("Hand off BB stack state to Dmitry's agents through PR comments")).toEqual([]);
+      // A unique exact name links; a duplicated name and a member do not.
+      expect(linksOf("Priya Raman owns the webhook signing keys")).toEqual([5106]);
+      // The project's repo links when the memory is about it.
+      expect(linksOf("Payments webhooks retry for 24 hours")).toEqual([5001]);
+      // An explicit id from another workspace cannot be linked to a memory saved here.
+      expect(linksOf("Ops runbook lives with the platform team")).toEqual([]);
+      // Tabs and transcript URLs never create entities.
+      expect(lobu.entities.length).toBe(entitiesBefore);
+      // The agent learns which mentions stayed unlinked and why.
+      expect(text).toContain('"Dmitry"');
+      expect(text).toContain('"Sam Rivera"');
+      expect(text).toContain('"Dmitry Nasikanov": no record has this exact name');
+      expect(brief("thread-pay-2", "proj-pay")).toContain("Project repository: acme/payments");
 
-    const result = String(
-      await call(
-        "lobu_remember",
-        {
-          memories: [
-            {
-              title: "Payment gateway requires HMAC verification",
-              content: "All inbound webhook notifications from payment-gateway must verify HMAC signatures.",
-              kind: "decision",
-              evidence: "Discussed security requirements in chat",
-            },
-          ],
-        },
-        "thread-gamma",
-        "proj-gamma",
-      ),
-    );
+      // The CLI takes mentions too.
+      const cli = await runCli(
+        ["remember", "--title", "Priya Raman approves key rotation", "--content", "Key rotation needs Priya Raman's approval.", "--kind", "decision", "--evidence", "User: Priya approves rotations", "--mentions", "Priya Raman", "--json"],
+        "thread-pay-3",
+        "proj-pay",
+      );
+      expect(cli.exitCode).toBe(0);
+      expect(linksOf("Priya Raman approves key rotation")).toEqual([5106]);
 
-    expect(result).toContain("Saved to the user's personal Lobu workspace (me)");
-    const mem = lobu.memories.find((m) => m.title === "Payment gateway requires HMAC verification")!;
-    expect(mem).toBeDefined();
-    expect(mem.entityIds).toBeDefined();
-    expect(mem.entityIds!.length).toBeGreaterThanOrEqual(4);
-
-    // Verify entities were created in Lobu
-    const createdSlugs = lobu.entities.map((e) => e.slug);
-    expect(createdSlugs).toContain("proj-gamma");
-    expect(createdSlugs).toContain("payment-gateway");
-    expect(createdSlugs).toContain("worker-service");
-    expect(createdSlugs).toContain("stripe-api-documentation");
-
-    // Verify the memory links to all of them
-    for (const ent of lobu.entities.filter((e) =>
-      ["proj-gamma", "payment-gateway", "worker-service", "stripe-api-documentation"].includes(e.slug),
-    )) {
-      expect(mem.entityIds).toContain(ent.id);
+      // Search shows only exact entity matches, never fuzzy look-alikes.
+      const search = String(await call("lobu_search", { query: "Hand off stack state" }, "thread-pay-4", "proj-pay"));
+      expect(search).not.toContain("Hande");
+      expect(search).not.toContain("Handy");
+    } finally {
+      lobu.entities.splice(0, lobu.entities.length, ...lobu.entities.filter((e) => !seeded.some((s) => s.id === e.id)));
     }
   });
 
