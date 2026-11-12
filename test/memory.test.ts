@@ -142,7 +142,7 @@ describe("saveMemories", () => {
     ]);
     expect(outcome).toEqual({
       workspace: "acme",
-      saved: [{ eventId: 1, title: "Use bun", url: `${BASE}/acme/events?id=1` }],
+      saved: [{ eventId: 1, title: "Use bun", url: `${BASE}/acme/events?id=1`, entityIds: [] }],
       failed: [{ title: "Bad kind", error: "semantic_type rejected" }],
       unlinked: [],
     });

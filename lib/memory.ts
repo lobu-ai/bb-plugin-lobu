@@ -109,7 +109,7 @@ export async function saveMemories(
           eventId: saved.id,
           title: memory.title,
           url: absoluteUrl(saved.viewUrl, baseUrl),
-          ...(saved.entityIds.length > 0 ? { entityIds: saved.entityIds } : {}),
+          entityIds: saved.entityIds,
           ...(memory.replacesEventId ? { replacedEventId: memory.replacesEventId } : {}),
           unlinked: describeUnlinked(saved.unlinked),
         };

@@ -620,10 +620,12 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   /** Searches memories and entities in the personal workspace and the project's linked one. */
+  /** `keepEntity` filters entities before the limit, so a kept match is never crowded out by dropped ones. */
   async function findMemoriesAndEntities(
     projectId: string | null,
     query: string,
     limit: number,
+    keepEntity: (entity: EntityHit) => boolean = () => true,
   ): Promise<SearchResults> {
     const owners = await memoryOwners();
     const targets = new Set<string>();
@@ -652,7 +654,7 @@ export default async function plugin(bb: BbPluginApi) {
     }
     return {
       hits: [...bestHits.values()].sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0)).slice(0, limit),
-      entities: [...bestEntities.values()].slice(0, limit),
+      entities: [...bestEntities.values()].filter(keepEntity).slice(0, limit),
     };
   }
 
@@ -918,7 +920,7 @@ export default async function plugin(bb: BbPluginApi) {
               url: saved.url,
               threadId,
               projectId,
-              entityIds: saved.entityIds ?? memoryDraft.entityIds ?? null,
+              entityIds: saved.entityIds ?? null,
               savedAt: now,
               uses: 0,
               lastUsedAt: null,
@@ -1092,10 +1094,10 @@ export default async function plugin(bb: BbPluginApi) {
   ): Promise<{ connected: boolean; hits: MemoryHit[]; text: string }> {
     if ((await memoryOwners()).size === 0) return { connected: false, hits: [], text: NOT_CONNECTED };
     const projectId = ctx.projectId ?? (ctx.threadId === null ? null : await projectOfThread(ctx.threadId));
-    const found = await findMemoriesAndEntities(projectId, query, limit);
-    const hits = found.hits;
     // Fuzzy name matches ("Hande" for "Hand off") would invite wrong links; list only entities the query names.
-    const entities = found.entities.filter((entity) => nameAppearsIn(entity.name, query));
+    const found = await findMemoriesAndEntities(projectId, query, limit, (entity) => nameAppearsIn(entity.name, query));
+    const hits = found.hits;
+    const entities = found.entities;
     const now = Date.now();
     if (ctx.threadId !== null) {
       memory.logs = capThreadLogs({ ...memory.logs, [ctx.threadId]: addSearch(memory.logs[ctx.threadId], { query, at: now, results: hits }) });
