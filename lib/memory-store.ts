@@ -296,6 +296,7 @@ export function briefFor(input: {
   }
   if (ambient.length > 0) {
     lines.push("", "Ambient workspace context:", ...ambient);
+    used += ambient.join("\n").length + 30;
   }
 
   const take = (heading: string, items: { eventId: number | null; workspace: string; title: string; content: string }[], source: "pinned" | "learned") => {

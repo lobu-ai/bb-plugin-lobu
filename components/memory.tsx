@@ -591,9 +591,19 @@ export function ProjectBrief({ projectId }: { projectId: string }) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     setView(null);
-    const load = () => rpc.call("projectMemory", { projectId }).then(setView, () => setView(null));
+    // A reply for a project the screen has since left is dropped.
+    let current = true;
+    const load = () =>
+      rpc.call("projectMemory", { projectId }).then(
+        (next) => current && setView(next),
+        () => current && setView(null),
+      );
     void load();
-    return onMemoryDeleted(() => void load());
+    const unsubscribe = onMemoryDeleted(() => void load());
+    return () => {
+      current = false;
+      unsubscribe();
+    };
   }, [rpc, projectId]);
   if (view === null) return null;
   const { project } = view;
@@ -780,19 +790,22 @@ export function ProjectSessions({ projectId }: { projectId: string }) {
       current = false;
     };
   }, [rpc, sessions]);
-  const load = useCallback(
-    () =>
-      rpc.call("savedMemories", { projectId }).then(
-        (page) => setSessions(page.sessions),
-        () => setSessions(null),
-      ),
-    [rpc, projectId],
-  );
   useEffect(() => {
     setSessions(null);
+    // A reply for a project the screen has since left is dropped.
+    let current = true;
+    const load = () =>
+      rpc.call("savedMemories", { projectId }).then(
+        (page) => current && setSessions(page.sessions),
+        () => current && setSessions(null),
+      );
     void load();
-    return onMemoryDeleted(() => void load());
-  }, [load]);
+    const unsubscribe = onMemoryDeleted(() => void load());
+    return () => {
+      current = false;
+      unsubscribe();
+    };
+  }, [rpc, projectId]);
   if (sessions === null || sessions.length === 0) return null;
   const memories = sessions.reduce((sum, session) => sum + session.records.length, 0);
   return (

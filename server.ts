@@ -567,8 +567,10 @@ export default async function plugin(bb: BbPluginApi) {
     );
     const remote = projectRemotes.get(projectId) ?? null;
     const projectRepo = remote === null ? null : githubRepoOf(remote);
+    // A record found through an earlier login names another workspace's id.
     const record = projectRecords.get(projectId) ?? null;
-    const projectRecord = record === null || record.repo !== projectRepo ? null : record;
+    const projectRecord =
+      record === null || record.repo !== projectRepo || record.workspace !== knownPersonalSlug ? null : record;
     const activeTab = activeBrowserTab(threadId);
     return {
       name,
