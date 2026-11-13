@@ -2,7 +2,6 @@
 // plugin server process and are never sent to the page.
 import { z } from "zod";
 import { cliFailure, createCliRunner, LobuSetupError } from "./cli";
-import type { EntityRef, UnlinkedName } from "./entity-links";
 
 /** How long a `lobu whoami` session is reused before asking the CLI again. */
 const SESSION_TTL_MS = 5 * 60_000;
@@ -24,7 +23,7 @@ export interface SaveMemoryInput {
   semantic_type: string;
   idempotency_key: string;
   supersedes_event_id?: number;
-  entity_ids?: EntityRef[];
+  entity_ids?: number[];
 }
 
 export interface SavedMemory {
@@ -32,8 +31,6 @@ export interface SavedMemory {
   viewUrl: string | null;
   /** Every record the memory is linked to, as Lobu stored it. */
   entityIds: number[];
-  /** Names Lobu did not link, and why. */
-  unlinked: UnlinkedName[];
 }
 
 /** A CLI login as `lobu whoami --json` reports it, the same source the Lobu Mac app reads. */
@@ -422,7 +419,6 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
         id?: number;
         view_url?: string;
         entity_ids?: unknown[];
-        unlinked?: UnlinkedName[];
         error?: string | { message?: string };
       };
       if (typeof saved.id !== "number") {
@@ -433,7 +429,6 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
         id: saved.id,
         viewUrl: saved.view_url ?? null,
         entityIds: (saved.entity_ids ?? []).map(Number).filter((id) => Number.isInteger(id) && id > 0),
-        unlinked: saved.unlinked ?? [],
       };
     },
 
@@ -477,6 +472,34 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
         content_ids: ids,
         limit: Math.min(Math.max(ids.length * 3, 50), 200),
       });
+    },
+
+    /**
+     * Every record in the workspace whose name is `name` (case-insensitive),
+     * or null when the search has more matches than one page holds, so the
+     * answer would not be complete.
+     */
+    async recordsNamed(context: string | null, workspace: string, name: string): Promise<{ id: number; type: string }[] | null> {
+      const script = `export default async (_ctx, client) => client.entities.list(${JSON.stringify({ search: name, limit: 100 })});`;
+      const result = (await request(context, `/api/${encodeURIComponent(workspace)}/query_sdk`, {
+        title: "Find the record named after a bb project's repository",
+        script,
+      })) as {
+        success?: boolean;
+        return_value?: { entities?: { id?: unknown; name?: unknown; entity_type?: unknown }[]; metadata?: { has_more?: boolean } };
+        error?: { message?: string };
+      };
+      if (result.success !== true) throw new Error(result.error?.message ?? "query_sdk failed");
+      if (result.return_value?.metadata?.has_more === true) return null;
+      const wanted = name.toLowerCase();
+      return (result.return_value?.entities ?? []).flatMap((entity) =>
+        typeof entity.id === "number" &&
+        typeof entity.name === "string" &&
+        typeof entity.entity_type === "string" &&
+        entity.name.toLowerCase() === wanted
+          ? [{ id: entity.id, type: entity.entity_type }]
+          : [],
+      );
     },
 
     /** Hides memories with Lobu's tombstone delete; they stay recoverable in Lobu. */

@@ -66,6 +66,12 @@ describe("recapPrompt", () => {
     expect(prompt).toContain("lobu_remember");
   });
 
+  test("gives the project's record id instead of asking for names", () => {
+    const prompt = recapPrompt("Anything", "User: hi", { repo: "acme/payments", id: 5001 });
+    expect(prompt).toContain("Lobu record 5001. Pass entityIds [5001] only for a memory about that codebase");
+    expect(prompt).not.toContain("mentions");
+  });
+
   test("expects nothing to keep and caps proposals at three", () => {
     const prompt = recapPrompt("Anything", "User: hi", null);
     expect(prompt).toContain('"Nothing to keep."');

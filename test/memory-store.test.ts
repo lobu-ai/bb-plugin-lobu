@@ -63,6 +63,16 @@ describe("briefFor", () => {
     expect(brief.text).toContain("Active browser tab: Acme App Dashboard (https://acme.example.com/dashboard)");
     expect(brief.given).toHaveLength(1);
     expect(brief.given[0].source).toBe("pinned");
+
+    const withRecord = briefFor({
+      projectName: "Acme",
+      linkedWorkspace: null,
+      pins,
+      learned: [],
+      projectRepo: "acme/acme-app",
+      projectRecord: { id: 4242, type: "product", workspace: "acme" },
+    })!;
+    expect(withRecord.text).toContain("Lobu record 4242 (product in acme). Pass entityIds [4242]");
   });
 });
 

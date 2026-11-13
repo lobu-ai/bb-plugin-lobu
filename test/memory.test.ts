@@ -27,14 +27,7 @@ function fakeApi(fail: (memory: SaveMemoryInput) => boolean = () => false) {
     saveMemory: async (context: string | null, workspace: string, memory: SaveMemoryInput) => {
       saves.push({ context, workspace, memory });
       if (fail(memory)) throw new Error("semantic_type rejected");
-      // Like Lobu with no record of any of the names: ids link, names come back unlinked.
-      const refs = memory.entity_ids ?? [];
-      return {
-        id: saves.length,
-        viewUrl: `/${workspace}/events?id=${saves.length}`,
-        entityIds: refs.filter((ref): ref is number => typeof ref === "number"),
-        unlinked: refs.flatMap((ref) => (typeof ref === "number" ? [] : [{ name: ref.name, reason: "not_found" }])),
-      };
+      return { id: saves.length, viewUrl: `/${workspace}/events?id=${saves.length}`, entityIds: memory.entity_ids ?? [] };
     },
   } as unknown as LobuApi;
   return { api, saves };
@@ -163,7 +156,7 @@ describe("saveMemories", () => {
     expect(idempotencyKey("thread-2", "acme", submission.memories[0]!)).not.toBe(a?.memory.idempotency_key);
   });
 
-  test("sends ids and mentioned names as entity_ids, and reports names Lobu left unlinked", async () => {
+  test("sends only record ids as entity_ids", async () => {
     const { api, saves } = fakeApi();
     const entitySubmission = rememberSubmissionSchema.parse({
       workspace: "acme",
@@ -172,17 +165,14 @@ describe("saveMemories", () => {
           title: "Project rule",
           content: "Link to repo",
           kind: "fact",
-          entityIds: [10, 20],
-          mentions: ["https://github.com/acme/payments/pull/3", "acme/payments", "Priya Raman"],
+          entityIds: [10, 20, 10],
         },
       ],
     });
     const outcome = await saveMemories(api, owner(), BASE, "thread-1", entitySubmission);
-    // A repository URL is sent by its owner/repo name, and each name once.
-    expect(saves[0]?.memory.entity_ids).toEqual([10, 20, { name: "acme/payments" }, { name: "Priya Raman" }]);
+    expect(saves[0]?.memory.entity_ids).toEqual([10, 20]);
     expect(outcome.saved[0]?.entityIds).toEqual([10, 20]);
     expect(describeOutcome(outcome).detail).toContain("(entities: 10, 20)");
-    expect(outcomeForAgent(outcome)).toContain('"Priya Raman": no record has this exact name; left unlinked.');
   });
 });
 

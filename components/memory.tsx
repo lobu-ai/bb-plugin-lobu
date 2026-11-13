@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { UrlLink, useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "@/lib/contract";
 import type {
+  LinkedEntity,
   MemoryHit,
   MemoryKind,
   PinnedMemory,
@@ -21,6 +22,20 @@ import { errorText, formatCount, sinceMs } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type WorkspaceOption = { slug: string; name: string };
+
+// The New thread screen shows a memory in both the brief and the sessions
+// card; deleting it in one refreshes the other.
+const memoryEvents = new EventTarget();
+
+function memoryDeleted() {
+  memoryEvents.dispatchEvent(new Event("deleted"));
+}
+
+/** Calls `listener` after any card deletes a memory; returns the unsubscribe. */
+function onMemoryDeleted(listener: () => void): () => void {
+  memoryEvents.addEventListener("deleted", listener);
+  return () => memoryEvents.removeEventListener("deleted", listener);
+}
 
 const KIND_STYLE: Record<MemoryKind, string> = {
   fact: "bg-sky-500/10 text-sky-700 dark:text-sky-300",
@@ -87,6 +102,35 @@ function IconAction({
     >
       <Icon name={icon} className="size-3.5" />
     </Button>
+  );
+}
+
+/** Edit opens the memory in Lobu; Delete removes it from Lobu right here. */
+function MemoryActions({
+  title,
+  url,
+  deleting,
+  onDelete,
+}: {
+  title: string;
+  url: string | null;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="flex shrink-0 items-center">
+      {url === null ? null : (
+        <UrlLink
+          href={url}
+          aria-label={`Edit "${title}" in Lobu`}
+          title="Edit in Lobu"
+          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <Icon name="lobu/pencil" className="size-3.5" />
+        </UrlLink>
+      )}
+      <IconAction icon="lobu/trash" label={`Delete "${title}" from Lobu`} onClick={onDelete} disabled={deleting} />
+    </div>
   );
 }
 
@@ -393,7 +437,7 @@ function LearnedGroups({
                 className={cn("group flex items-start gap-2 py-1.5 text-sm", dimmed?.(item) && "opacity-50")}
               >
                 <div className="min-w-0 flex-1">
-                  {item.url === null ? (
+                  {item.url === null || action !== undefined ? (
                     <span>{item.title}</span>
                   ) : (
                     <UrlLink href={item.url} className="hover:underline">
@@ -458,16 +502,17 @@ function ProjectContext({
             items={project.learned}
             action={(item) =>
               item.eventId === null ? null : (
-                <IconAction
-                  icon="lobu/close"
-                  label={`Remove "${item.title}" from brief and Lobu`}
-                  disabled={busy === `undo-${item.eventId}`}
-                  onClick={() =>
+                <MemoryActions
+                  title={item.title}
+                  url={item.url}
+                  deleting={busy === `undo-${item.eventId}`}
+                  onDelete={() =>
                     void run(`undo-${item.eventId}`, async () => {
                       await rpc.call("undoMemory", { eventId: item.eventId as number });
                       const refreshed = await rpc.call("projectMemory", { projectId: project.id });
                       onProject(refreshed.project);
-                      return `Removed "${item.title}". It stays recoverable in Lobu.`;
+                      memoryDeleted();
+                      return `Deleted "${item.title}". It stays recoverable in Lobu.`;
                     })
                   }
                 />
@@ -546,7 +591,9 @@ export function ProjectBrief({ projectId }: { projectId: string }) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     setView(null);
-    rpc.call("projectMemory", { projectId }).then(setView, () => setView(null));
+    const load = () => rpc.call("projectMemory", { projectId }).then(setView, () => setView(null));
+    void load();
+    return onMemoryDeleted(() => void load());
   }, [rpc, projectId]);
   if (view === null) return null;
   const { project } = view;
@@ -574,32 +621,68 @@ export function ProjectBrief({ projectId }: { projectId: string }) {
 
 type SessionMemory = SavedSession["records"][number];
 
-function SessionRow({ record }: { record: SessionMemory }) {
-  const title = <span className="font-medium">{record.title}</span>;
+function SessionRow({
+  record,
+  entities,
+  deleting,
+  onDelete,
+}: {
+  record: SessionMemory;
+  /** The records it links to; empty until their names are read. */
+  entities: LinkedEntity[];
+  deleting: boolean;
+  onDelete: () => void;
+}) {
   return (
-    <li className="py-2 text-sm">
-      {record.url === null ? (
-        title
-      ) : (
-        <UrlLink href={record.url} className="hover:underline">
-          {title}
-        </UrlLink>
-      )}
-      {record.content.trim() === "" || record.content === record.title ? null : (
-        <p className="line-clamp-2 text-xs text-muted-foreground">{record.content}</p>
-      )}
-      <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
-        <span>{record.kind}</span>
-        <span aria-hidden>·</span>
-        <span>{record.workspace}</span>
-        {record.uses === 0 ? null : (
-          <span className="rounded-full bg-emerald-500/10 px-1.5 text-emerald-700 dark:text-emerald-300">
-            found {formatCount(record.uses)}×
-          </span>
+    <li className={cn("flex items-start gap-2 py-2 text-sm", deleting && "opacity-50")}>
+      <div className="min-w-0 flex-1">
+        <span className="font-medium">{record.title}</span>
+        {record.content.trim() === "" || record.content === record.title ? null : (
+          <p className="line-clamp-2 text-xs text-muted-foreground">{record.content}</p>
         )}
-        {record.recap ? <span className="rounded-full bg-muted px-1.5">archive recap</span> : null}
-      </p>
+        <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+          <span>{record.kind}</span>
+          <span aria-hidden>·</span>
+          <span>{record.workspace}</span>
+          {entities
+            // Lobu's own record types ($member: whoever saved it) are on every memory.
+            .filter((entity) => entity.type === null || !entity.type.startsWith("$"))
+            .map((entity) => (
+              <EntityChip key={entity.id} entity={entity} />
+            ))}
+          {record.uses === 0 ? null : (
+            <span className="rounded-full bg-emerald-500/10 px-1.5 text-emerald-700 dark:text-emerald-300">
+              found {formatCount(record.uses)}×
+            </span>
+          )}
+          {record.recap ? <span className="rounded-full bg-muted px-1.5">archive recap</span> : null}
+        </p>
+      </div>
+      <MemoryActions title={record.title} url={record.url} deleting={deleting} onDelete={onDelete} />
     </li>
+  );
+}
+
+/** A record the memory is about, as "name · type", opening it in Lobu; "#id" when Lobu could not read it. */
+function EntityChip({ entity }: { entity: LinkedEntity }) {
+  const label =
+    entity.name === null ? (
+      `#${entity.id}`
+    ) : (
+      <>
+        {entity.name}
+        {entity.type === null ? null : <span className="opacity-60"> · {entity.type}</span>}
+      </>
+    );
+  const className = "rounded-full border border-border px-1.5";
+  return entity.url === null ? (
+    <span className={className} title={`Lobu record #${entity.id}`}>
+      {label}
+    </span>
+  ) : (
+    <UrlLink href={entity.url} className={cn(className, "hover:text-foreground")} title={`Lobu record #${entity.id}`}>
+      {label}
+    </UrlLink>
   );
 }
 
@@ -610,7 +693,17 @@ function sessionName(session: SavedSession): string {
 }
 
 /** One session: the thread that learned something, and what it saved. */
-function SessionBlock({ session }: { session: SavedSession }) {
+function SessionBlock({
+  session,
+  records,
+  deleting,
+  onDelete,
+}: {
+  session: SavedSession;
+  records: ReadonlyMap<string, LinkedEntity>;
+  deleting: string | null;
+  onDelete: (record: SessionMemory) => void;
+}) {
   const navigate = useBbNavigate();
   const opensThread = session.kind === "thread" && session.title !== null;
   const newest = session.records[0]?.savedAt ?? null;
@@ -641,7 +734,16 @@ function SessionBlock({ session }: { session: SavedSession }) {
       <p className="text-xs text-muted-foreground">{facts.join(" · ")}</p>
       <ul className="mt-1 divide-y divide-border border-l border-border pl-3">
         {session.records.map((record) => (
-          <SessionRow key={`${record.workspace}-${record.eventId}`} record={record} />
+          <SessionRow
+            key={`${record.workspace}-${record.eventId}`}
+            record={record}
+            entities={(record.entityIds ?? []).flatMap((id) => {
+              const entity = records.get(`${record.workspace}:${id}`);
+              return entity === undefined ? [] : [entity];
+            })}
+            deleting={deleting === `delete-${record.eventId}`}
+            onDelete={() => onDelete(record)}
+          />
         ))}
       </ul>
     </li>
@@ -656,13 +758,41 @@ export function ProjectSessions({ projectId }: { projectId: string }) {
   const rpc = useRpc<typeof rpcContract>();
   const [sessions, setSessions] = useState<SavedSession[] | null>(null);
   const [open, setOpen] = useState(false);
+  const { busy, error, notice, run } = useActions();
+  // Record names come after the list, so a slow Lobu read never holds it up.
+  const [records, setRecords] = useState<ReadonlyMap<string, LinkedEntity>>(new Map());
+  useEffect(() => {
+    const refs = new Map<string, { workspace: string; id: number }>();
+    for (const session of sessions ?? []) {
+      for (const record of session.records) {
+        for (const id of record.entityIds ?? []) refs.set(`${record.workspace}:${id}`, { workspace: record.workspace, id });
+      }
+    }
+    if (refs.size === 0) return;
+    let current = true;
+    rpc.call("linkedRecords", { records: [...refs.values()].slice(0, 200) }).then(
+      (page) => {
+        if (current) setRecords(new Map(page.records.map((entity) => [`${entity.workspace}:${entity.id}`, entity])));
+      },
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+  }, [rpc, sessions]);
+  const load = useCallback(
+    () =>
+      rpc.call("savedMemories", { projectId }).then(
+        (page) => setSessions(page.sessions),
+        () => setSessions(null),
+      ),
+    [rpc, projectId],
+  );
   useEffect(() => {
     setSessions(null);
-    rpc.call("savedMemories", { projectId }).then(
-      (page) => setSessions(page.sessions),
-      () => setSessions(null),
-    );
-  }, [rpc, projectId]);
+    void load();
+    return onMemoryDeleted(() => void load());
+  }, [load]);
   if (sessions === null || sessions.length === 0) return null;
   const memories = sessions.reduce((sum, session) => sum + session.records.length, 0);
   return (
@@ -680,9 +810,22 @@ export function ProjectSessions({ projectId }: { projectId: string }) {
         <div className="space-y-2 pb-2">
           <ul className="divide-y divide-border">
             {sessions.map((session) => (
-              <SessionBlock key={session.threadId} session={session} />
+              <SessionBlock
+                key={session.threadId}
+                session={session}
+                records={records}
+                deleting={busy}
+                onDelete={(record) =>
+                  void run(`delete-${record.eventId}`, async () => {
+                    await rpc.call("undoMemory", { eventId: record.eventId });
+                    memoryDeleted();
+                    return `Deleted "${record.title}". It stays recoverable in Lobu.`;
+                  })
+                }
+              />
             ))}
           </ul>
+          <Status error={error} notice={notice} />
           <SavedInLobu />
         </div>
       ) : null}
@@ -692,7 +835,6 @@ export function ProjectSessions({ projectId }: { projectId: string }) {
 
 const THREAD_POLL_MS = 15_000;
 
-/** The thread's Lobu memory panel: what it started with, looked up, and saved. */
 /** Lobu's events page with everything bb saved through the login it uses. */
 function SavedInLobu() {
   const rpc = useRpc<typeof rpcContract>();
@@ -711,6 +853,7 @@ function SavedInLobu() {
   );
 }
 
+/** The thread's Lobu memory panel: what it started with, looked up, and saved. */
 export function ThreadMemoryPanel({ threadId }: { threadId: string }) {
   const rpc = useRpc<typeof rpcContract>();
   const [data, setData] = useState<ThreadMemory | null>(null);

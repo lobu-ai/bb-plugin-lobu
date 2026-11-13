@@ -3,6 +3,7 @@ import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
   learnResultSchema,
+  linkedEntitySchema,
   memoryKinds,
   projectMemoryViewSchema,
   pinInputSchema,
@@ -123,6 +124,11 @@ export const rpcContract = defineRpcContract({
   savedMemories: {
     input: z.object({ projectId: z.string() }),
     output: z.object({ sessions: z.array(savedSessionSchema) }),
+  },
+  /** Names and types of the Lobu records saved memories link to, read after the list renders. */
+  linkedRecords: {
+    input: z.object({ records: z.array(z.object({ workspace: z.string(), id: z.number().int().positive() })).max(200) }),
+    output: z.object({ records: z.array(linkedEntitySchema) }),
   },
   /** Opens the review form in a thread with text the user picked. */
   remember: {

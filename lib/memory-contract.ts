@@ -16,10 +16,8 @@ export const memoryDraftSchema = z.object({
   workspace: z.string().trim().min(1).nullish(),
   /** Event id of an older saved memory this one corrects or replaces (shown in lobu_search and the project brief). */
   replacesEventId: z.number().int().positive().nullish(),
-  /** Lobu entity IDs to link this memory with (e.g. projects, people, repositories). */
+  /** Lobu record ids the agent was shown (in the brief or lobu_search) and this memory is about. */
   entityIds: z.array(z.number().int().positive()).nullish(),
-  /** Full names of the specific records this memory is about; each links only on a unique exact match. */
-  mentions: z.array(z.string().trim().min(2).max(120)).max(5).nullish(),
 });
 export type MemoryDraft = z.infer<typeof memoryDraftSchema>;
 
@@ -76,6 +74,16 @@ export const savedRecordSchema = z.object({
   lastUsedAt: z.number().nullable(),
 });
 export type SavedRecord = z.infer<typeof savedRecordSchema>;
+
+/** A Lobu record a saved memory is linked to; name, type, and url are null when Lobu could not read it. */
+export const linkedEntitySchema = z.object({
+  workspace: z.string(),
+  id: z.number(),
+  name: z.string().nullable(),
+  type: z.string().nullable(),
+  url: z.string().nullable(),
+});
+export type LinkedEntity = z.infer<typeof linkedEntitySchema>;
 
 /** One bb session's saves for the Lobu page: the thread, what it started with, what it saved. */
 export const savedSessionSchema = z.object({

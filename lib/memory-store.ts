@@ -268,9 +268,11 @@ export function briefFor(input: {
   learned: SavedRecord[];
   /** The project's repository ("owner/repo"), which a memory about it mentions. */
   projectRepo?: string | null;
+  /** The Lobu record named after that repository, which a memory about the codebase links by id. */
+  projectRecord?: { id: number; type: string; workspace: string } | null;
   activeTab?: { title: string; url: string } | null;
 }): Brief | null {
-  const { projectName, linkedWorkspace, pins, projectRepo, activeTab } = input;
+  const { projectName, linkedWorkspace, pins, projectRepo, projectRecord, activeTab } = input;
   const learned = input.learned.slice(0, MAX_LEARNED_IN_BRIEF);
   if (pins.length === 0 && learned.length === 0) return null;
   const header = [
@@ -282,7 +284,13 @@ export function briefFor(input: {
   let used = header.join("\n").length + 200;
 
   const ambient: string[] = [];
-  if (projectRepo) ambient.push(`- Project repository: ${projectRepo}`);
+  if (projectRepo && projectRecord) {
+    ambient.push(
+      `- Project repository: ${projectRepo}, Lobu record ${projectRecord.id} (${projectRecord.type} in ${projectRecord.workspace}). Pass entityIds [${projectRecord.id}] when a memory is about this codebase.`,
+    );
+  } else if (projectRepo) {
+    ambient.push(`- Project repository: ${projectRepo}`);
+  }
   if (activeTab) {
     ambient.push(`- Active browser tab: ${clip(activeTab.title, 120)} (${clip(activeTab.url, 160)})`);
   }

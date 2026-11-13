@@ -334,6 +334,15 @@ beforeAll(() => {
           automations: lobu.automations.filter((a) => a.workspace === workspace),
         });
       }
+      if (tool === "query_sdk") {
+        // client.entities.list({ search }): every record whose name contains the term.
+        const input = JSON.parse(String(body.script).match(/list\((\{.*\})\)/)?.[1] ?? "{}") as { search?: string };
+        const term = (input.search ?? "").toLowerCase();
+        const entities = lobu.entities
+          .filter((e) => e.workspace === workspace && e.name.toLowerCase().includes(term))
+          .map((e) => ({ id: e.id, name: e.name, entity_type: e.type }));
+        return Response.json({ success: true, return_value: { entities, metadata: { has_more: false } } });
+      }
       if (tool === "run_sdk") {
         const ids = JSON.parse(String(body.script).match(/delete\((\{.*\})\)/)?.[1] ?? "{}").content_ids as number[];
         for (const m of lobu.memories) if (ids.includes(m.id) && m.workspace === workspace) m.deleted = true;
@@ -517,7 +526,10 @@ describe("the memory loop", () => {
     // A new thread in the project starts with what earlier threads learned.
     const text = brief("thread-3");
     expect(text).toContain("## Lobu memory for Acme app");
-    expect(text).toContain("Project repository: acme/acme-app");
+    // It names the repository's Lobu record by id, so agents link it without guessing a name.
+    expect(text).toContain(
+      "Project repository: acme/acme-app, Lobu record 4242 (product in me). Pass entityIds [4242] when a memory is about this codebase.",
+    );
     expect(text).toContain("Learned in earlier threads of this project:");
     expect(text).toContain(deployGotcha.title);
     const startLog = (await rpc.threadMemory!({ threadId: "thread-3" })) as {
@@ -1080,20 +1092,10 @@ describe("the memory loop", () => {
     expect(text).toContain("Active browser tab: App Docs (http://localhost:3000/docs)");
   });
 
-  test("links a memory only to exact, unambiguous mentions, its project's repo included", async () => {
-    // A realistic people graph: fuzzy name search turns "Hand off" into Hande,
-    // Handy and Handel, and "Dmitry" into every Dmitry. None of them may be linked.
+  test("links a memory only to record ids the agent was shown, never to names", async () => {
     const seeded = [
       { id: 5001, name: "acme/payments", slug: "payments", type: "product", workspace: "me" },
-      { id: 5101, name: "Hande Örs", slug: "person-5101", type: "person", workspace: "me" },
-      { id: 5102, name: "Tristan Handy", slug: "person-5102", type: "person", workspace: "me" },
-      { id: 5103, name: "Nick Handel", slug: "person-5103", type: "person", workspace: "me" },
-      { id: 5104, name: "Dmitry Karpov", slug: "person-5104", type: "person", workspace: "me" },
-      { id: 5105, name: "Dmitry Sorokin", slug: "person-5105", type: "person", workspace: "me" },
       { id: 5106, name: "Priya Raman", slug: "person-5106", type: "person", workspace: "me" },
-      { id: 5107, name: "Sam Rivera", slug: "person-5107", type: "person", workspace: "me" },
-      { id: 5108, name: "Sam Rivera", slug: "person-5108", type: "person", workspace: "me" },
-      { id: 5109, name: "Someone Example", slug: "member-5109", type: "$member", workspace: "me" },
       { id: 5201, name: "Team Service", slug: "team-service", type: "product", workspace: "team" },
     ];
     lobu.entities.push(...seeded);
@@ -1108,25 +1110,6 @@ describe("the memory loop", () => {
             get: async () => ({ projectId: "proj-pay" }),
             list: async () => [],
             getPluginMetadata: async () => ({}),
-            events: {
-              list: async () => [
-                {
-                  seq: 1,
-                  type: "client/turn/requested",
-                  data: { input: [{ type: "text", text: "Hand off the stack to Dmitry; see https://github.com/acme/worker-service" }] },
-                },
-              ],
-            },
-          },
-          hosts: { list: async () => [{ id: "host-1" }] },
-          experimental_desktopBrowsers: {
-            listInstances: async () => ({ instances: [{ instanceId: "inst-1", generation: "gen-1" }] }),
-            listTabs: async () => ({
-              tabs: [
-                { tabId: "t1", url: "https://github.com/acme/worker-service", title: "worker-service", presentation: "reveal" },
-                { tabId: "t2", url: "https://stripe.com/docs/api", title: "Stripe API Documentation", presentation: "reveal" },
-              ],
-            }),
           },
         },
       });
@@ -1136,25 +1119,19 @@ describe("the memory loop", () => {
           {
             memories: [
               {
-                title: "Hand off BB stack state to Dmitry's agents through PR comments",
-                content: "Post the stack state as a PR comment so Dmitry's agents pick it up.",
-                kind: "preference",
-                evidence: "User: hand it off in the PR",
-                mentions: ["Dmitry", "Dmitry Nasikanov"],
-              },
-              {
                 title: "Priya Raman owns the webhook signing keys",
-                content: "Ask Priya Raman before rotating webhook signing keys; Sam Rivera only reviews.",
+                content: "Ask Priya Raman before rotating webhook signing keys.",
                 kind: "fact",
                 evidence: "User: Priya owns the keys",
-                mentions: ["Priya Raman", "Sam Rivera", "Someone Example"],
+                // Names are not a way to link: an older client still sending them links nothing.
+                mentions: ["Priya Raman"],
               },
               {
                 title: "Payments webhooks retry for 24 hours",
                 content: "acme/payments retries failed webhook deliveries for 24 hours before dropping them.",
                 kind: "fact",
                 evidence: "Agent: found the retry window in the worker",
-                mentions: ["acme/payments"],
+                entityIds: [5001],
               },
               {
                 title: "Ops runbook lives with the platform team",
@@ -1170,25 +1147,27 @@ describe("the memory loop", () => {
         ),
       );
       const linksOf = (title: string) => [...(lobu.memories.find((m) => m.title === title)?.entityIds ?? [])].sort();
-      // A first name and a partial-name hit link nothing, and the project's repo is not linked unasked.
-      expect(linksOf("Hand off BB stack state to Dmitry's agents through PR comments")).toEqual([]);
-      // A unique exact name links; a duplicated name and a member do not.
-      expect(linksOf("Priya Raman owns the webhook signing keys")).toEqual([5106]);
-      // The project's repo links when the memory is about it.
+      expect(linksOf("Priya Raman owns the webhook signing keys")).toEqual([]);
+      // An id the agent was shown links, and the save says what it linked to.
       expect(linksOf("Payments webhooks retry for 24 hours")).toEqual([5001]);
+      expect(text).toContain("- Payments webhooks retry for 24 hours [linked to: acme/payments (product 5001)]");
       // An explicit id from another workspace cannot be linked to a memory saved here.
       expect(linksOf("Ops runbook lives with the platform team")).toEqual([]);
-      // Tabs and transcript URLs never create entities.
+      expect(text).toContain("entity id 5201: not a record in the me workspace; not linked.");
       expect(lobu.entities.length).toBe(entitiesBefore);
-      // The agent learns which mentions stayed unlinked and why.
-      expect(text).toContain('"Dmitry"');
-      expect(text).toContain('"Sam Rivera"');
-      expect(text).toContain('"Dmitry Nasikanov": no record has this exact name');
-      expect(brief("thread-pay-2", "proj-pay")).toContain("Project repository: acme/payments");
 
-      // The CLI takes mentions too.
+      // The brief gives the id of the one record named after the project's repository.
+      brief("thread-pay-2", "proj-pay");
+      let given = "";
+      for (let attempt = 0; attempt < 50 && !given.includes("Lobu record 5001"); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        given = brief("thread-pay-2", "proj-pay") ?? "";
+      }
+      expect(given).toContain("Project repository: acme/payments, Lobu record 5001 (product in me).");
+
+      // The CLI links by id too.
       const cli = await runCli(
-        ["remember", "--title", "Priya Raman approves key rotation", "--content", "Key rotation needs Priya Raman's approval.", "--kind", "decision", "--evidence", "User: Priya approves rotations", "--mentions", "Priya Raman", "--json"],
+        ["remember", "--title", "Priya Raman approves key rotation", "--content", "Key rotation needs Priya Raman's approval.", "--kind", "decision", "--evidence", "User: Priya approves rotations", "--entity-ids", "5106", "--json"],
         "thread-pay-3",
         "proj-pay",
       );
@@ -1206,7 +1185,7 @@ describe("the memory loop", () => {
 
   test("the New thread screen lists the project's sessions and what each saved", async () => {
     const { rpc, call } = await startPlugin();
-    await call(
+    const result = await call(
       "lobu_remember",
       {
         memories: [
@@ -1215,21 +1194,49 @@ describe("the memory loop", () => {
             content: "Saved from the sessions test.",
             kind: "note",
             evidence: "Synthetic test memory",
+            entityIds: [4242],
           },
         ],
       },
       "thread-panel",
       "proj-1",
     );
+    // The save says what each name linked to, type included, so a wrong match shows.
+    expect(String(result)).toContain("- Panel save [linked to: acme/acme-app (product 4242)]");
     type Sessions = {
-      sessions: { threadId: string; title: string | null; projectName: string | null; records: { title: string }[] }[];
+      sessions: {
+        threadId: string;
+        title: string | null;
+        projectName: string | null;
+        records: {
+          eventId: number;
+          title: string;
+          workspace: string;
+          entityIds?: number[] | null;
+        }[];
+      }[];
     };
     const saved = (await rpc.savedMemories!({ projectId: "proj-1" })) as Sessions;
     const panelSession = saved.sessions.find((session) => session.threadId === "thread-panel");
     expect(panelSession).toMatchObject({ title: "Plan the launch", projectName: "Acme app" });
     expect(panelSession?.records.map((record) => record.title)).toContain("Panel save");
+    // The screen then names the records each memory links to.
+    const panelRecord = panelSession?.records.find((record) => record.title === "Panel save");
+    const linked = (await rpc.linkedRecords!({
+      records: (panelRecord?.entityIds ?? []).map((id) => ({ workspace: panelRecord!.workspace, id })),
+    })) as { records: unknown[] };
+    expect(linked.records).toEqual([
+      { workspace: "me", id: 4242, name: "acme/acme-app", type: "product", url: expect.stringContaining("/me/product/acme-app") },
+    ]);
 
     const elsewhere = (await rpc.savedMemories!({ projectId: "proj-other" })) as Sessions;
     expect(elsewhere.sessions).toEqual([]);
+
+    // Delete on the screen removes it from Lobu and from the list.
+    const panelSave = panelSession?.records.find((record) => record.title === "Panel save");
+    await rpc.undoMemory!({ eventId: panelSave!.eventId });
+    const after = (await rpc.savedMemories!({ projectId: "proj-1" })) as Sessions;
+    const titles = after.sessions.flatMap((session) => session.records.map((record) => record.title));
+    expect(titles).not.toContain("Panel save");
   });
 });
