@@ -5,6 +5,7 @@ import {
   capThreadLogs,
   countUses,
   entitiesFromSearch,
+  groupBySession,
   hitsFromSearch,
   learnedFor,
   parseSaved,
@@ -62,6 +63,16 @@ describe("briefFor", () => {
     expect(brief.text).toContain("Active browser tab: Acme App Dashboard (https://acme.example.com/dashboard)");
     expect(brief.given).toHaveLength(1);
     expect(brief.given[0].source).toBe("pinned");
+
+    const withRecord = briefFor({
+      projectName: "Acme",
+      linkedWorkspace: null,
+      pins,
+      learned: [],
+      projectRepo: "acme/acme-app",
+      projectRecord: { id: 4242, type: "product", workspace: "acme" },
+    })!;
+    expect(withRecord.text).toContain("Lobu record 4242 (product in acme). Pass entityIds [4242]");
   });
 });
 
@@ -174,5 +185,45 @@ describe("entitiesFromSearch", () => {
       { id: 10, type: "company", name: "Acme", slug: "acme", workspace: "team", url: "https://lobu.example/team/company/acme" },
       { id: 20, type: "project", name: "Project Lobu", slug: "lobu", workspace: "team", url: "https://lobu.example/team/project/lobu" },
     ]);
+  });
+});
+
+describe("groupBySession", () => {
+  const log = (given: number, searches: number) => ({
+    given: Array.from({ length: given }, (_, i) => ({ eventId: i, workspace: "acme", title: `m${i}`, source: "learned" as const })),
+    searches: Array.from({ length: searches }, (_, i) => ({ query: `q${i}`, at: i, results: [] })),
+    updatedAt: 1,
+  });
+
+  test("groups by session, marks saves after archiving as the recap, and names terminal and project saves", () => {
+    const threads = new Map([["thr_a", { title: "Fix the login banner", projectName: "Acme", archivedAt: 500 }]]);
+    const sessions = groupBySession(
+      [
+        record({ eventId: 4, threadId: "thr_a", savedAt: 600 }),
+        record({ eventId: 3, threadId: "cli", savedAt: 450, projectId: "p1" }),
+        record({ eventId: 2, threadId: "thr_a", savedAt: 400 }),
+        record({ eventId: 1, threadId: "project:p1", savedAt: 300, projectId: "p1" }),
+      ],
+      threads,
+      { thr_a: log(8, 2) },
+      (projectId) => (projectId === "p1" ? "Acme" : null),
+    );
+    expect(sessions.map((s) => [s.threadId, s.kind, s.title, s.projectName])).toEqual([
+      ["thr_a", "thread", "Fix the login banner", "Acme"],
+      ["cli", "terminal", null, "Acme"],
+      ["project:p1", "project", null, "Acme"],
+    ]);
+    expect(sessions[0]?.archived).toBe(true);
+    expect([sessions[0]?.startedWith, sessions[0]?.lookedUp]).toEqual([8, 2]);
+    expect(sessions[0]?.records.map((r) => [r.eventId, r.recap])).toEqual([
+      [4, true],
+      [2, false],
+    ]);
+  });
+
+  test("a thread bb no longer has keeps its saves, untitled and not a recap", () => {
+    const [session] = groupBySession([record({ eventId: 9, threadId: "thr_gone", savedAt: 900 })], new Map(), {}, () => null);
+    expect([session?.kind, session?.title, session?.archived, session?.records[0]?.recap]).toEqual(["thread", null, false, false]);
+    expect([session?.startedWith, session?.lookedUp]).toEqual([null, null]);
   });
 });

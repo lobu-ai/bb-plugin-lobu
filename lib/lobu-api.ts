@@ -2,13 +2,10 @@
 // plugin server process and are never sent to the page.
 import { z } from "zod";
 import { cliFailure, createCliRunner, LobuSetupError } from "./cli";
-import type { EntityRef, UnlinkedName } from "./entity-links";
 
 /** How long a `lobu whoami` session is reused before asking the CLI again. */
 const SESSION_TTL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
-/** The semantic types save_memory writes; read_knowledge filters by these. */
-const MEMORY_KINDS = ["fact", "decision", "preference", "observation", "note"] as const;
 /** A new Lobu on this machine loads its search model on the first search, which takes longer. */
 const LOCAL_REQUEST_TIMEOUT_MS = 120_000;
 
@@ -26,7 +23,7 @@ export interface SaveMemoryInput {
   semantic_type: string;
   idempotency_key: string;
   supersedes_event_id?: number;
-  entity_ids?: EntityRef[];
+  entity_ids?: number[];
 }
 
 export interface SavedMemory {
@@ -34,8 +31,6 @@ export interface SavedMemory {
   viewUrl: string | null;
   /** Every record the memory is linked to, as Lobu stored it. */
   entityIds: number[];
-  /** Names Lobu did not link, and why. */
-  unlinked: UnlinkedName[];
 }
 
 /** A CLI login as `lobu whoami --json` reports it, the same source the Lobu Mac app reads. */
@@ -424,7 +419,6 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
         id?: number;
         view_url?: string;
         entity_ids?: unknown[];
-        unlinked?: UnlinkedName[];
         error?: string | { message?: string };
       };
       if (typeof saved.id !== "number") {
@@ -435,7 +429,6 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
         id: saved.id,
         viewUrl: saved.view_url ?? null,
         entityIds: (saved.entity_ids ?? []).map(Number).filter((id) => Number.isInteger(id) && id > 0),
-        unlinked: saved.unlinked ?? [],
       };
     },
 
@@ -473,43 +466,40 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
       });
     },
 
-    /**
-     * Saved memories in one workspace, filtered by kind and date; with a
-     * query, the best matches. `read_knowledge` carries all of it in one call.
-     */
-    async filteredMemories(
-      context: string | null,
-      workspace: string,
-      input: { query: string | null; kinds: readonly string[]; since: string | null; limit: number },
-    ): Promise<unknown> {
-      const result = await request(context, `/api/${encodeURIComponent(workspace)}/read_knowledge`, {
-        ...(input.query === null
-          ? { sort_by: "date", sort_order: "desc" }
-          : { query: input.query, sort_by: "score" }),
-        semantic_type: input.kinds.length > 0 ? input.kinds : MEMORY_KINDS,
-        ...(input.since === null ? {} : { since: input.since }),
-        limit: input.limit,
-        include_total: false,
-      });
-      // read_knowledge leaves platform empty for a workspace save; only
-      // search_memory fills in "lobu". Normalize here so both read the same.
-      const content = (result as { content?: unknown }).content;
-      if (Array.isArray(content)) {
-        for (const row of content) {
-          if (typeof row !== "object" || row === null) continue;
-          const item = row as Record<string, unknown>;
-          if (item.platform == null && item.connection_id == null) item.platform = "lobu";
-        }
-      }
-      return result;
-    },
-
     /** Exact event lineages for saved event ids, including supersede and tombstone chains. */
     async readEvents(context: string | null, workspace: string, ids: number[]): Promise<unknown> {
       return request(context, `/api/${encodeURIComponent(workspace)}/read_knowledge`, {
         content_ids: ids,
         limit: Math.min(Math.max(ids.length * 3, 50), 200),
       });
+    },
+
+    /**
+     * Every record in the workspace whose name is `name` (case-insensitive),
+     * or null when the search has more matches than one page holds, so the
+     * answer would not be complete.
+     */
+    async recordsNamed(context: string | null, workspace: string, name: string): Promise<{ id: number; type: string }[] | null> {
+      const script = `export default async (_ctx, client) => client.entities.list(${JSON.stringify({ search: name, limit: 100 })});`;
+      const result = (await request(context, `/api/${encodeURIComponent(workspace)}/query_sdk`, {
+        title: "Find the record named after a bb project's repository",
+        script,
+      })) as {
+        success?: boolean;
+        return_value?: { entities?: { id?: unknown; name?: unknown; entity_type?: unknown }[]; metadata?: { has_more?: boolean } };
+        error?: { message?: string };
+      };
+      if (result.success !== true) throw new Error(result.error?.message ?? "query_sdk failed");
+      if (result.return_value?.metadata?.has_more === true) return null;
+      const wanted = name.toLowerCase();
+      return (result.return_value?.entities ?? []).flatMap((entity) =>
+        typeof entity.id === "number" &&
+        typeof entity.name === "string" &&
+        typeof entity.entity_type === "string" &&
+        entity.name.toLowerCase() === wanted
+          ? [{ id: entity.id, type: entity.entity_type }]
+          : [],
+      );
     },
 
     /** Hides memories with Lobu's tombstone delete; they stay recoverable in Lobu. */

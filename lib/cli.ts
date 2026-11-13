@@ -107,15 +107,12 @@ function errorOutput(text: unknown): string {
 /**
  * Turns a failed CLI run into setup steps from its exit status: a missing
  * binary, a CLI that could not run (126/127 from the shell or `env`, a signal,
- * a timeout, or an unexpected status), or `lobu token`'s exit 1 for no usable login.
+ * a timeout, or any other non-zero status). A signed-out login is not a
+ * failure: `lobu whoami --json` reports it with exit 0 and `loggedIn: false`.
  */
 export function cliFailure(error: unknown, context: string | null): LobuSetupError {
   const failure = error as { code?: unknown; killed?: boolean; signal?: unknown; stderr?: unknown };
   if (failure.code === "ENOENT") return new LobuSetupError("cli_missing", context, "The lobu CLI is not installed.");
-  if (failure.code === 1) {
-    const label = context ?? "the active context";
-    return new LobuSetupError("not_logged_in", context, `The lobu CLI has no login for ${label}.`);
-  }
   const detail = failure.killed
     ? `it did not answer within ${CLI_TIMEOUT_MS / 1000} seconds`
     : errorOutput(failure.stderr) || `it exited with ${String(failure.signal ?? failure.code)}`;

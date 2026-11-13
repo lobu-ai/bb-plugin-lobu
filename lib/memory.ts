@@ -1,7 +1,6 @@
 // Save to Lobu: turns reviewed drafts into Lobu memories with save_memory,
 // through the user's CLI login.
 import { createHash } from "node:crypto";
-import { describeUnlinked, entityRefsOf, normalizeName } from "./entity-links";
 import type { MemoryDraft, RememberSubmission } from "./memory-contract";
 import type { LobuApi } from "./lobu-api";
 import type { WorkspaceOwner } from "./workspaces";
@@ -12,7 +11,7 @@ export interface SaveOutcome {
   workspace: string;
   saved: { eventId: number; title: string; url: string | null; entityIds?: number[]; replacedEventId?: number }[];
   failed: { title: string; error: string }[];
-  /** Why a name or id was not linked, for the agent. */
+  /** Why an id was not linked, for the agent. */
   unlinked: string[];
 }
 
@@ -74,10 +73,8 @@ export function absoluteUrl(viewUrl: string | null, baseUrl: string): string | n
 /** Same thread, workspace, and text saves once, even if the form is submitted twice. */
 export function idempotencyKey(threadId: string, workspace: string, memory: MemoryDraft): string {
   const replaces = memory.replacesEventId ? `\nreplaces:${memory.replacesEventId}` : "";
-  const refs = entityRefsOf(memory.entityIds ?? [], memory.mentions ?? []).map((ref) =>
-    typeof ref === "number" ? String(ref) : `name:${normalizeName(ref.name)}`,
-  );
-  const entities = refs.length > 0 ? `\nentities:${refs.sort().join(",")}` : "";
+  const ids = [...new Set(memory.entityIds ?? [])].sort((a, b) => a - b);
+  const entities = ids.length > 0 ? `\nentities:${ids.join(",")}` : "";
   const digest = createHash("sha256")
     .update(`${threadId}\n${workspace}\n${memory.title}\n${memory.content}${replaces}${entities}`)
     .digest("hex");
@@ -95,14 +92,14 @@ export async function saveMemories(
   const results = await Promise.all(
     submission.memories.map(async (memory) => {
       try {
-        const refs = entityRefsOf(memory.entityIds ?? [], memory.mentions ?? []);
+        const ids = [...new Set(memory.entityIds ?? [])];
         const saved = await api.saveMemory(owner.context, workspace, {
           title: memory.title,
           content: memory.content,
           semantic_type: memory.kind,
           idempotency_key: idempotencyKey(threadId, workspace, memory),
           ...(memory.replacesEventId ? { supersedes_event_id: memory.replacesEventId } : {}),
-          ...(refs.length > 0 ? { entity_ids: refs } : {}),
+          ...(ids.length > 0 ? { entity_ids: ids } : {}),
         });
         return {
           ok: true as const,
@@ -111,7 +108,6 @@ export async function saveMemories(
           url: absoluteUrl(saved.viewUrl, baseUrl),
           entityIds: saved.entityIds,
           ...(memory.replacesEventId ? { replacedEventId: memory.replacesEventId } : {}),
-          unlinked: describeUnlinked(saved.unlinked),
         };
       } catch (cause) {
         return { ok: false as const, title: memory.title, error: cause instanceof Error ? cause.message : String(cause) };
@@ -130,7 +126,7 @@ export async function saveMemories(
         ...(replacedEventId === undefined ? {} : { replacedEventId }),
       })),
     failed: results.filter((r) => !r.ok).map(({ title, error }) => ({ title, error })),
-    unlinked: [...new Set(results.flatMap((r) => (r.ok ? r.unlinked : [])))],
+    unlinked: [],
   };
 }
 

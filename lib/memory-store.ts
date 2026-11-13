@@ -11,6 +11,7 @@ import {
   pinnedMemorySchema,
   type SavedRecord,
   savedRecordSchema,
+  type SavedSession,
   type ThreadLog,
   threadLogSchema,
 } from "./memory-contract";
@@ -207,6 +208,49 @@ function line(title: string, content: string, eventId: number | null): string {
   return body === "" || body === title ? `- ${clip(title, ITEM_CHARS)}${idTag}` : `- ${clip(title, 120)}${idTag}: ${body}`;
 }
 
+/** What bb knows about a thread when grouping its saves. */
+export interface SessionThread {
+  title: string | null;
+  projectName: string | null;
+  archivedAt: number | null;
+}
+
+/**
+ * Groups saved records, newest first, by the session that saved them. A save
+ * made after its thread was archived came from the archive recap. `threads`
+ * has no entry for a thread bb no longer has.
+ */
+export function groupBySession(
+  records: SavedRecord[],
+  threads: ReadonlyMap<string, SessionThread>,
+  logs: Record<string, ThreadLog>,
+  projectNameOf: (projectId: string | null) => string | null,
+): SavedSession[] {
+  const sessions = new Map<string, SavedSession>();
+  for (const record of records) {
+    const thread = threads.get(record.threadId) ?? null;
+    let session = sessions.get(record.threadId);
+    if (session === undefined) {
+      const log = logs[record.threadId];
+      const kind = record.threadId === "cli" ? "terminal" : record.threadId.startsWith("project:") ? "project" : "thread";
+      session = {
+        threadId: record.threadId,
+        kind,
+        title: thread?.title ?? null,
+        projectName: thread?.projectName ?? projectNameOf(record.projectId),
+        archived: thread !== null && thread.archivedAt !== null,
+        startedWith: log === undefined ? null : log.given.length,
+        lookedUp: log === undefined ? null : log.searches.length,
+        records: [],
+      };
+      sessions.set(record.threadId, session);
+    }
+    const archivedAt = thread?.archivedAt ?? null;
+    session.records.push({ ...record, recap: archivedAt !== null && record.savedAt >= archivedAt });
+  }
+  return [...sessions.values()];
+}
+
 export interface Brief {
   text: string;
   given: ThreadLog["given"];
@@ -224,9 +268,11 @@ export function briefFor(input: {
   learned: SavedRecord[];
   /** The project's repository ("owner/repo"), which a memory about it mentions. */
   projectRepo?: string | null;
+  /** The Lobu record named after that repository, which a memory about the codebase links by id. */
+  projectRecord?: { id: number; type: string; workspace: string } | null;
   activeTab?: { title: string; url: string } | null;
 }): Brief | null {
-  const { projectName, linkedWorkspace, pins, projectRepo, activeTab } = input;
+  const { projectName, linkedWorkspace, pins, projectRepo, projectRecord, activeTab } = input;
   const learned = input.learned.slice(0, MAX_LEARNED_IN_BRIEF);
   if (pins.length === 0 && learned.length === 0) return null;
   const header = [
@@ -238,12 +284,19 @@ export function briefFor(input: {
   let used = header.join("\n").length + 200;
 
   const ambient: string[] = [];
-  if (projectRepo) ambient.push(`- Project repository: ${projectRepo}`);
+  if (projectRepo && projectRecord) {
+    ambient.push(
+      `- Project repository: ${projectRepo}, Lobu record ${projectRecord.id} (${projectRecord.type} in ${projectRecord.workspace}). Pass entityIds [${projectRecord.id}] when a memory is about this codebase.`,
+    );
+  } else if (projectRepo) {
+    ambient.push(`- Project repository: ${projectRepo}`);
+  }
   if (activeTab) {
     ambient.push(`- Active browser tab: ${clip(activeTab.title, 120)} (${clip(activeTab.url, 160)})`);
   }
   if (ambient.length > 0) {
     lines.push("", "Ambient workspace context:", ...ambient);
+    used += ambient.join("\n").length + 30;
   }
 
   const take = (heading: string, items: { eventId: number | null; workspace: string; title: string; content: string }[], source: "pinned" | "learned") => {

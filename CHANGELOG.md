@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Memories link to Lobu records only by ids the agent was shown, never by
+  name: `mentions` and `--mentions` are gone, since a guessed name could link
+  the wrong record of the same name. New threads and archive recaps get the id
+  of the one record named after the project's repository, and a save tells the
+  agent what each memory linked to, with the record's type.
+- Saved memories on the New thread screen have Edit and Delete, and show the
+  records they link to once Lobu has named them.
+- The Lobu sidebar page is gone; its parts live where they are used. The New
+  thread screen shows each memory a new thread starts with under the thread
+  that taught it, and the project's recent sessions with what each started
+  with, looked up, and saved. The thread panel groups what a thread started
+  with the same way. Search all of Lobu in Lobu; switch logins in Settings.
+- A failed or slow `lobu` CLI check no longer reads as signed out: the setup
+  card says what failed and checks again until it clears.
+
 ## 0.8.0
 
 - Memories link to entities only on certain evidence. Fuzzy name search over

@@ -13,6 +13,7 @@ import type { ChildProcess } from "node:child_process";
 import { createLobuApi, kindOfOrigin, lobuOrigin, pickCloudContext, pickOriginContext, type AutomationItem, type CliContext, type ConnectionItem, type DeviceItem, type FeedItem, type TabItem } from "./lib/lobu-api";
 import { hasProject, isServing, lastLogLine, LOCAL_CONTEXT, localFolders, localPort, macAppOwnsLocal, startLocal } from "./lib/local";
 import {
+  type BriefItem,
   type EntityHit,
   type MemoryDraft,
   type MemoryHit,
@@ -23,6 +24,7 @@ import {
   REMEMBER_RENDERER,
   type RememberForm,
   rememberSubmissionSchema,
+  type LinkedEntity,
   type SavedRecord,
 } from "./lib/memory-contract";
 import {
@@ -44,7 +46,9 @@ import {
   countUses,
   entitiesFromSearch,
   hitsFromSearch,
+  groupBySession,
   learnedFor,
+  type SessionThread,
   LINKS_KEY,
   parseLinks,
   parseProjectPins,
@@ -56,7 +60,7 @@ import {
   THREAD_LOGS_KEY,
 } from "./lib/memory-store";
 import { discoverWorkspaces, savedEventsPath, type WorkspaceOwner } from "./lib/workspaces";
-import { describeUnlinked, entityRefsOf, githubRepoOf, nameAppearsIn } from "./lib/entity-links";
+import { githubRepoOf, nameAppearsIn } from "./lib/entity-links";
 import {
   RECAP_SOURCE_KEY,
   RECAP_TITLE_KEY,
@@ -159,6 +163,8 @@ export default async function plugin(bb: BbPluginApi) {
   const TAB_TEXT_CHARS = 800;
   /** How long a resolve may spend refreshing before it answers from the cache. */
   const RESOLVE_REFRESH_MS = 1500;
+  /** How long the sessions list waits on Lobu for one linked record's name. */
+  const ENTITY_READ_MS = 3000;
 
   /** Feeds, automations, connections, and devices for the login bb uses, cached briefly for @-mention filtering. */
   let mentionFlight: Promise<MentionLists> | null = null;
@@ -561,6 +567,10 @@ export default async function plugin(bb: BbPluginApi) {
     );
     const remote = projectRemotes.get(projectId) ?? null;
     const projectRepo = remote === null ? null : githubRepoOf(remote);
+    // A record found through an earlier login names another workspace's id.
+    const record = projectRecords.get(projectId) ?? null;
+    const projectRecord =
+      record === null || record.repo !== projectRepo || record.workspace !== knownPersonalSlug ? null : record;
     const activeTab = activeBrowserTab(threadId);
     return {
       name,
@@ -574,17 +584,129 @@ export default async function plugin(bb: BbPluginApi) {
         pins,
         learned,
         projectRepo,
+        projectRecord,
         activeTab: activeTab ? { title: activeTab.title, url: activeTab.url } : null,
       }),
     };
   }
 
+  // Titles and archive state of the threads memories were saved in, for
+  // grouping by session; a deleted or unknown thread is cached as null.
+  const sessionThreads = new Map<string, SessionThread | null>();
+  async function loadSessionThreads(threadIds: string[]): Promise<ReadonlyMap<string, SessionThread>> {
+    const ids = [...new Set(threadIds)].filter((id) => id !== "cli" && id !== "lobu" && !id.startsWith("project:"));
+    await Promise.all(
+      ids.map(async (threadId) => {
+        const thread = await bb.sdk.threads.get({ threadId }).catch(() => null);
+        sessionThreads.set(
+          threadId,
+          thread === null || thread.deletedAt !== null
+            ? null
+            : {
+                title: thread.title ?? thread.titleFallback,
+                projectName: thread.projectId ? (projectNames.get(thread.projectId) ?? null) : null,
+                archivedAt: thread.archivedAt,
+              },
+        );
+      }),
+    );
+    const known = new Map<string, SessionThread>();
+    for (const id of ids) {
+      const thread = sessionThreads.get(id);
+      if (thread) known.set(id, thread);
+    }
+    return known;
+  }
+
+  // The one Lobu record named after each project's repository in the personal
+  // workspace (where memories are saved), by project id, so the brief can give
+  // agents its id instead of leaving them to guess a name. A failed lookup
+  // keeps the last answer; no record, or several, clears it.
+  const projectRecords = new Map<string, { repo: string; id: number; type: string; workspace: string }>();
+  async function refreshProjectRecord(projectId: string): Promise<void> {
+    const repo = await projectRepoOf(projectId);
+    const personal = personalOf(await memoryOwners());
+    if (repo === null || personal === null) {
+      projectRecords.delete(projectId);
+      return;
+    }
+    const named = await api.recordsNamed(personal.owner.context, personal.slug, repo);
+    const records = (named ?? []).filter((record) => !record.type.startsWith("$"));
+    const [only] = records;
+    if (named !== null && records.length === 1 && only !== undefined) {
+      projectRecords.set(projectId, { repo, id: only.id, type: only.type, workspace: personal.slug });
+    } else {
+      projectRecords.delete(projectId);
+    }
+  }
+
+  /** The project's repository and its Lobu record id, looked up once if not known yet. */
+  async function projectRecordOf(projectId: string | null): Promise<{ repo: string; id: number } | null> {
+    if (projectId === null) return null;
+    if (!projectRecords.has(projectId)) await refreshProjectRecord(projectId).catch(() => undefined);
+    const record = projectRecords.get(projectId);
+    return record === undefined ? null : { repo: record.repo, id: record.id };
+  }
+
+  // Names and types of the records saved memories link to, by "workspace:id".
+  // A record Lobu answered for is cached, readable or not; a failed or slow
+  // read is not, so the next request tries it again.
+  const linkedEntities = new Map<string, LinkedEntity>();
+  async function linkedRecords(refs: readonly { workspace: string; id: number }[]): Promise<LinkedEntity[]> {
+    const keyOf = (workspace: string, id: number) => `${workspace}:${id}`;
+    const unique = new Map(refs.map((ref) => [keyOf(ref.workspace, ref.id), ref]));
+    const missing = [...unique].filter(([key]) => !linkedEntities.has(key));
+    if (missing.length > 0) {
+      const reached = await reachLobu().catch(() => null);
+      await Promise.all(
+        missing.map(async ([key, { workspace, id }]) => {
+          const owner = reached?.owners.get(workspace);
+          if (reached === null || owner === undefined) return;
+          const raw = await withBound(api.readEntity(owner.context, workspace, id).catch(() => null), ENTITY_READ_MS);
+          if (raw === null) return;
+          const entity = entitiesFromSearch(raw, reached.origin, workspace).find((hit) => hit.id === id);
+          linkedEntities.set(
+            key,
+            entity === undefined
+              ? { workspace, id, name: null, type: null, url: null }
+              : { workspace, id, name: entity.name, type: entity.type, url: entity.url },
+          );
+        }),
+      );
+    }
+    return [...unique].map(([key, { workspace, id }]) => linkedEntities.get(key) ?? { workspace, id, name: null, type: null, url: null });
+  }
+
   function projectView(projectId: string): ProjectMemory {
     const { name, workspace, pins, brief } = projectState(projectId);
-    const learned = (brief?.given ?? []).flatMap(({ eventId, workspace: slug, title, source }) =>
-      source === "learned" ? [{ eventId, workspace: slug, title }] : [],
-    );
+    const learned = (brief?.given ?? []).flatMap((item) => (item.source === "learned" ? [briefItem(item)] : []));
     return { id: projectId, name, workspace, pins, learned };
+  }
+
+  /** A memory a brief gave, with its text, link, and the thread that saved it, from what bb saved. */
+  function briefItem({ eventId, workspace: slug, title }: { eventId: number | null; workspace: string; title: string }): BriefItem {
+    const record = eventId === null ? undefined : memory.saved.find((saved) => saved.eventId === eventId && saved.workspace === slug);
+    const threadId = record === undefined || record.threadId === "lobu" ? null : record.threadId;
+    return {
+      eventId,
+      workspace: slug,
+      title,
+      content: record?.content ?? "",
+      url: record?.url ?? null,
+      threadId,
+      threadTitle: threadId === null ? null : (sessionThreads.get(threadId)?.title ?? null),
+    };
+  }
+
+  /** The threads that saved these memories, looked up so their titles show. */
+  async function loadBriefThreads(items: { eventId: number | null; workspace: string; title: string }[]): Promise<void> {
+    await loadSessionThreads(items.flatMap((item) => briefItem(item).threadId ?? []));
+  }
+
+  /** projectView, after looking up the threads its learned memories came from. */
+  async function projectViewWithThreads(projectId: string): Promise<ProjectMemory> {
+    await loadBriefThreads(projectView(projectId).learned);
+    return projectView(projectId);
   }
 
   async function projectOfThread(threadId: string): Promise<string | null> {
@@ -676,8 +798,10 @@ export default async function plugin(bb: BbPluginApi) {
     saved: SavedRecord[];
     duplicates: { title: string; existing: MemoryHit }[];
     failed: { title: string; error: string }[];
-    /** Why mentions or explicit ids were not linked, for the agent. */
+    /** Why explicit ids were not linked, for the agent. */
     unlinked: string[];
+    /** What each saved memory was linked to, by event id, without Lobu's own ($) records. */
+    linked: Map<number, LinkedEntity[]>;
   }
 
   async function listSessionTabs(threadId: string | null): Promise<{ title: string; url: string }[]> {
@@ -739,8 +863,7 @@ export default async function plugin(bb: BbPluginApi) {
 
   /**
    * The explicit entity ids of each draft that are records in the workspace it
-   * is saved to, and a line for each one that is not. Mentions are linked by
-   * Lobu itself, by exact name, when the memory is saved.
+   * is saved to, and a line for each one that is not.
    */
   async function confirmedEntityIds(
     owner: WorkspaceOwner,
@@ -767,7 +890,14 @@ export default async function plugin(bb: BbPluginApi) {
     const personal = personalOf(owners);
     if (personal === null) return null;
     const { origin: baseUrl } = await reachLobu();
-    const outcome: AutoSaveOutcome = { workspace: personal.slug, saved: [], duplicates: [], failed: [], unlinked: [] };
+    const outcome: AutoSaveOutcome = {
+      workspace: personal.slug,
+      saved: [],
+      duplicates: [],
+      failed: [],
+      unlinked: [],
+      linked: new Map(),
+    };
     const replacements: { replacedEventId?: number | null; record: SavedRecord }[] = [];
     // The brief that follows a save shows the thread's current browser tab.
     await refreshBbBrowserTab(threadId);
@@ -785,7 +915,6 @@ export default async function plugin(bb: BbPluginApi) {
           continue;
         }
         const confirmed = { ...draft, entityIds: links.ids[index] ?? [] };
-        const refs = entityRefsOf(confirmed.entityIds, draft.mentions ?? []);
 
         const saved = await api.saveMemory(personal.owner.context, personal.slug, {
           title: draft.title,
@@ -793,9 +922,8 @@ export default async function plugin(bb: BbPluginApi) {
           semantic_type: draft.kind,
           idempotency_key: idempotencyKey(threadId, personal.slug, confirmed),
           ...(draft.replacesEventId ? { supersedes_event_id: draft.replacesEventId } : {}),
-          ...(refs.length > 0 ? { entity_ids: refs } : {}),
+          ...(confirmed.entityIds.length > 0 ? { entity_ids: confirmed.entityIds } : {}),
         });
-        for (const line of describeUnlinked(saved.unlinked)) unlinked.add(line);
         const record: SavedRecord = {
           eventId: saved.id,
           workspace: personal.slug,
@@ -818,6 +946,13 @@ export default async function plugin(bb: BbPluginApi) {
     }
     rememberWithReplacements(replacements);
     outcome.unlinked = [...unlinked];
+    for (const record of outcome.saved) {
+      const refs = (record.entityIds ?? []).map((id) => ({ workspace: record.workspace, id }));
+      outcome.linked.set(
+        record.eventId,
+        (await linkedRecords(refs)).filter((entity) => entity.type === null || !entity.type.startsWith("$")),
+      );
+    }
     return outcome;
   }
 
@@ -826,8 +961,10 @@ export default async function plugin(bb: BbPluginApi) {
     if (outcome.saved.length > 0) {
       lines.push(`Saved to the user's personal Lobu workspace (${outcome.workspace}):`);
       for (const record of outcome.saved) {
-        const entityTag = record.entityIds && record.entityIds.length > 0 ? ` [entities: ${record.entityIds.join(", ")}]` : "";
-        lines.push(`- ${record.title}${entityTag}`);
+        const linked = (outcome.linked.get(record.eventId) ?? []).map(
+          (entity) => `${entity.name ?? "an unreadable record"} (${[entity.type, entity.id].filter((part) => part !== null).join(" ")})`,
+        );
+        lines.push(`- ${record.title}${linked.length > 0 ? ` [linked to: ${linked.join(", ")}]` : ""}`);
       }
     }
     if (outcome.duplicates.length > 0) {
@@ -855,6 +992,7 @@ export default async function plugin(bb: BbPluginApi) {
   // Every thread starts with its project's brief: pins, then what earlier threads learned.
   bb.agents.contributeInstructions(({ threadId, projectId }) => {
     void refreshBbBrowserTab(threadId);
+    if (!projectRecords.has(projectId)) void refreshProjectRecord(projectId).catch(() => undefined);
     const { brief } = projectState(projectId, threadId);
     if (brief === null) return null;
     const log = memory.logs[threadId];
@@ -901,7 +1039,7 @@ export default async function plugin(bb: BbPluginApi) {
       memoryDraft.entityIds = links.ids[index] ?? [];
     });
     const saved = await saveMemories(api, owner, (await reachLobu()).origin, threadId, submission);
-    const outcome = { ...saved, unlinked: [...new Set([...links.unlinked, ...saved.unlinked])] };
+    const outcome = { ...saved, unlinked: links.unlinked };
     await bb.storage.kv.set(PREFERRED_WORKSPACE, submission.workspace);
     const now = Date.now();
     rememberWithReplacements(
@@ -1018,7 +1156,7 @@ export default async function plugin(bb: BbPluginApi) {
       visibility: "hidden",
       title: `Lobu recap: ${title}`,
       pluginMetadata: { [RECAP_SOURCE_KEY]: thread.id, [RECAP_TITLE_KEY]: title },
-      prompt: recapPrompt(title, transcript.text + tabsNote, await projectRepoOf(thread.projectId)),
+      prompt: recapPrompt(title, transcript.text + tabsNote, await projectRecordOf(thread.projectId)),
     });
     await finishRecap(worker.id);
   }
@@ -1683,7 +1821,7 @@ export default async function plugin(bb: BbPluginApi) {
     description:
       "Save memories worth keeping to the user's Lobu memory. With the user's auto-save setting on, they go straight to the personal workspace and the user can undo them; otherwise the user reviews them in a form first.",
     instructions:
-      "When a task leaves something worth keeping across sessions, call lobu_remember once at the end with at most three short, self-contained memories. Propose one only if a different agent, on a different task next month, would act differently because of it: a decision, a non-obvious fact or gotcha, or a preference the user stated as a standing rule. The user saying a rule is its evidence: save it without asking them to prove it or confirm the people in it. Most tasks contain nothing worth keeping; then do not call the tool. Never propose what the task built or changed, anything the repo or code already states, generic quality wishes, task requirements, or one-off values. Each memory needs a short evidence quote of the turn or finding it came from. Never include secrets, credentials, or temporary state. Name the workspace a memory belongs to when it is team knowledge rather than the user's own. In mentions, list the full names of the specific people, companies, products, or repositories (as owner/repo) a memory is about, not tools or concepts it only uses; mention this project's own repository only when the memory is about that codebase or product; a mention is linked only when exactly one Lobu record has that exact name, and the result says which stayed unlinked and why. Pass entityIds only for records you confirmed are the ones the memory is about. When correcting an outdated memory shown in the brief or returned by lobu_search, pass its event id as replacesEventId so the stale memory is superseded instead of keeping both. Use lobu_remember rather than other memory-saving tools, so the user can see and undo what was saved. If lobu_remember is not in your tool list, run `bb lobu remember --title ... --content ... --kind ... --evidence ...` (with `--replaces-id <id>` when replacing an older memory, `--mentions \"Full Name,owner/repo\"` for what it is about, `--entity-ids <id,id>` for confirmed records).",
+      "When a task leaves something worth keeping across sessions, call lobu_remember once at the end with at most three short, self-contained memories. Propose one only if a different agent, on a different task next month, would act differently because of it: a decision, a non-obvious fact or gotcha, or a preference the user stated as a standing rule. The user saying a rule is its evidence: save it without asking them to prove it or confirm the people in it. Most tasks contain nothing worth keeping; then do not call the tool. Never propose what the task built or changed, anything the repo or code already states, generic quality wishes, task requirements, or one-off values. Each memory needs a short evidence quote of the turn or finding it came from. Never include secrets, credentials, or temporary state. Name the workspace a memory belongs to when it is team knowledge rather than the user's own. Link a memory to a Lobu record only by an id you were shown, in the brief or in lobu_search's matched entities, and only when the memory is about that record; otherwise save it unlinked. When correcting an outdated memory shown in the brief or returned by lobu_search, pass its event id as replacesEventId so the stale memory is superseded instead of keeping both. Use lobu_remember rather than other memory-saving tools, so the user can see and undo what was saved. If lobu_remember is not in your tool list, run `bb lobu remember --title ... --content ... --kind ... --evidence ...` (with `--replaces-id <id>` when replacing an older memory, `--entity-ids <id,id>` for records you were shown).",
     presentation: {
       label: { pending: "Saving memories to Lobu", completed: "Lobu memory" },
       icon: { glyph: "lobu/memory" },
@@ -1818,12 +1956,7 @@ export default async function plugin(bb: BbPluginApi) {
             "entity-ids": {
               type: "string",
               aliases: ["entity-id"],
-              description: "Comma-separated Lobu entity IDs confirmed to be what this memory is about",
-            },
-            mentions: {
-              type: "string",
-              aliases: ["mention"],
-              description: "Comma-separated full names (or owner/repo) this memory is about; each links only on a unique exact match",
+              description: "Comma-separated Lobu record ids you were shown (brief or lobu search) that this memory is about",
             },
             json: {
               type: "boolean",
@@ -1846,12 +1979,6 @@ export default async function plugin(bb: BbPluginApi) {
               workspace: options.workspace ?? null,
               replacesEventId: options["replaces-id"] ?? null,
               entityIds: entityIds && entityIds.length > 0 ? entityIds : null,
-              mentions: options.mentions
-                ? options.mentions
-                    .split(",")
-                    .map((name) => name.trim())
-                    .filter((name) => name !== "")
-                : null,
             });
             if (!parsed.success) {
               const issue = parsed.error.issues[0];
@@ -1903,58 +2030,20 @@ export default async function plugin(bb: BbPluginApi) {
     };
   }
 
-  /**
-   * The Lobu page's memory list: the newest memories across every workspace
-   * the login reaches, or the best matches for a query. A workspace that
-   * fails only drops its own rows, so one bad login never blanks the page.
-   */
-  async function panelMemories(
-    query: string | null,
-    limit: number,
-    filter: { workspace: string | null; kinds: string[]; since: string | null },
-  ) {
-    const owners = await memoryOwners();
-    if (owners.size === 0) throw new Error(`No Lobu workspace is available. ${SETUP_HINT}`);
-    const { origin: baseUrl } = await reachLobu();
-    const targets =
-      filter.workspace === null ? [...owners] : [...owners].filter(([slug]) => slug === filter.workspace);
-    if (targets.length === 0) {
-      throw new Error(`The Lobu login bb uses cannot reach the ${filter.workspace} workspace.`);
-    }
-    const pages = await Promise.all(
-      targets.map(async ([slug, owner]) => {
-        const raw = await api
-          .filteredMemories(owner.context, slug, {
-            query,
-            kinds: filter.kinds,
-            since: filter.since,
-            limit: Math.min(limit * 3, 100),
-          })
-          .catch(() => undefined);
-        return { slug, ok: raw !== undefined, hits: raw === undefined ? [] : hitsFromSearch(raw, baseUrl, slug) };
-      }),
-    );
-    const best = new Map<number, MemoryHit>();
-    for (const page of pages) {
-      for (const hit of page.hits) if (!best.has(hit.eventId)) best.set(hit.eventId, hit);
-    }
-    const hits = [...best.values()];
-    if (query === null) {
-      hits.sort((a, b) => (Date.parse(b.occurredAt ?? "") || 0) - (Date.parse(a.occurredAt ?? "") || 0));
-    } else {
-      hits.sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
-    }
-    return {
-      hits: hits.slice(0, limit),
-      failed: pages.filter((page) => !page.ok).map((page) => page.slug),
-      workspaces: [...owners].map(([slug, owner]) => ({ slug, name: owner.name })),
-    };
-  }
-
   // Concurrent card renders share one status computation instead of each
   // re-spawning the CLI; the UI polls this every few seconds while waiting.
   let setupFlight: Promise<SetupStatus> | null = null;
+  // The card re-checks every few seconds while a problem shows; log each new
+  // problem once so a failure that clears itself still leaves its cause.
+  let loggedProblem: string | null = null;
   async function computeSetupStatus(): Promise<SetupStatus> {
+    const status = await readSetupStatus();
+    const problem = status.login?.problem ?? null;
+    if (problem !== null && problem !== loggedProblem) bb.log.warn(`Lobu login '${status.login?.context ?? "active"}' is not usable: ${problem}`);
+    loggedProblem = problem;
+    return status;
+  }
+  async function readSetupStatus(): Promise<SetupStatus> {
       const [cli, installer] = await Promise.all([api.cliState(), api.installer()]);
       const starting = localChild !== null;
       const listed = cli.state === "ready" ? ((await api.cliContexts()) ?? []) : [];
@@ -2111,65 +2200,18 @@ export default async function plugin(bb: BbPluginApi) {
       await api.markNotificationRead(owner.context, workspace, notificationId);
       return { read: true };
     },
-    memories: async ({ query, limit, workspace, kinds, since }) => {
-      const text = query?.trim() ?? "";
-      return panelMemories(text === "" ? null : text, limit ?? 30, {
-        workspace: workspace ?? null,
-        kinds: kinds ?? [],
-        since: since ?? null,
-      });
-    },
-    savedMemories: async () => {
+    savedMemories: async ({ projectId }) => {
       await syncLobuMemories().catch(() => undefined);
       const owners = await memoryOwners();
-      return {
-        records: memory.saved
-          .filter((record) => record.threadId !== "lobu" && owners.has(record.workspace))
-          .sort((a, b) => b.savedAt - a.savedAt)
-          .slice(0, 50)
-          .map((record) => ({
-            ...record,
-            projectName: record.projectId === null ? null : (projectNames.get(record.projectId) ?? null),
-          })),
-      };
+      const records = memory.saved
+        .filter((record) => record.projectId === projectId && record.threadId !== "lobu" && owners.has(record.workspace))
+        .sort((a, b) => b.savedAt - a.savedAt)
+        .slice(0, 50);
+      const projectNameOf = (projectId: string | null) => (projectId === null ? null : (projectNames.get(projectId) ?? null));
+      const threads = await loadSessionThreads(records.map((record) => record.threadId));
+      return { sessions: groupBySession(records, threads, memory.logs, projectNameOf) };
     },
-    connections: async () => {
-      const owners = await memoryOwners();
-      const personal = personalOf(owners);
-      const context = personal?.owner.context ?? null;
-      let failed = false;
-      const [devices, connections] = await Promise.all([
-        api.listDevices(context).catch(() => {
-          failed = true;
-          return [];
-        }),
-        personal === null
-          ? Promise.resolve([])
-          : api.listConnections(context, personal.slug).catch(() => {
-              failed = true;
-              return [];
-            }),
-      ]);
-      return {
-        devices: devices.map((device) => ({
-          id: device.id,
-          label: device.label,
-          platform: device.platform,
-          online: device.online,
-          lastSeenAt: device.lastSeenAt,
-        })),
-        connections: connections.map((connection) => ({
-          id: connection.id,
-          name: connection.displayName,
-          connectorName: connection.connectorName,
-          account: connection.account,
-          deviceLabel: connection.deviceLabel,
-          status: connection.status,
-          errorMessage: connection.errorMessage,
-        })),
-        failed,
-      };
-    },
+    linkedRecords: async ({ records }) => ({ records: await linkedRecords(records) }),
     remember: async ({ threadId, text }) => {
       // The form stays open until the user answers, so do not hold the RPC.
       const opened = review(threadId, [draftFromText(text)]);
@@ -2193,17 +2235,23 @@ export default async function plugin(bb: BbPluginApi) {
       // The user is looking at Lobu: warm the @-mention lists in the background
       // so the first @ keystroke filters in memory instead of fetching.
       void mentionLists().catch(() => undefined);
-      return { ...(await workspaceOptions()), project: projectView(projectId) };
+      // A thread started from this screen starts with the project's record id.
+      void refreshProjectRecord(projectId).catch(() => undefined);
+      return { ...(await workspaceOptions()), project: await projectViewWithThreads(projectId) };
     },
     threadMemory: async ({ threadId }) => {
       const projectId = await projectOfThread(threadId);
       if (projectId !== null && !projectNames.has(projectId)) await refreshProjects().catch(() => undefined);
       await syncLobuMemories();
       void mentionLists().catch(() => undefined);
+      const log = memory.logs[threadId] ?? null;
+      const given = log?.given ?? [];
+      await loadBriefThreads(given);
       return {
         ...(await workspaceOptions()),
         project: projectId === null ? null : projectView(projectId),
-        log: memory.logs[threadId] ?? null,
+        log,
+        startedWith: given.map((item) => ({ ...briefItem(item), source: item.source })),
         saved: memory.saved.filter((record) => record.threadId === threadId),
       };
     },

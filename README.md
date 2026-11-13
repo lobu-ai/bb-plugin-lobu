@@ -40,26 +40,23 @@ The same steps live on in Settings → Plugins → Lobu, in a **Lobu account**
 section: which Lobu bb uses, who it is signed in as, the workspace agents
 save to, and how many memories bb has saved there, with a link to them. It lists every CLI context bb knows, like the Mac app's CONTEXT section, so switching is one click. Add a new context with `lobu context add` in a terminal; the plugin picks it up on its next check.
 
-## The Lobu page
+## On the New thread screen
 
-**Lobu** in bb's sidebar is a page for the login bb uses:
+Once bb is connected, the New thread screen shows Lobu for the project you
+are starting a thread in:
 
 - **Inbox** — unread Lobu notifications, newest first, with **Open** and
-  **Mark read**. The first five stay in view and **Show all** unfolds the rest.
-- **Memories** — **Saved from bb** (the default) lists what agents saved in
-  bb threads, with the project, how often search has reused it, and links to
-  the Lobu event and the source thread. **All of Lobu** searches across every
-  workspace the login reaches, filtered by workspace, memory kind, and time
-  window (24h, 7 days, or 30 days).
-- **Devices and connections** — paired devices with their online state, plus
-  the connections that report an error or a broken status, with **Manage in
-  Lobu** for the rest.
+  **Mark read**.
+- **What new threads start with** — your pinned notes, then the memories
+  earlier threads learned, each under the thread that taught it. The thread
+  title opens that thread; the memory title opens it in Lobu to read, edit,
+  or delete.
+- **Recent sessions** — each thread in the project that saved something:
+  what it started with, what it looked up, and what it saved, with a link to
+  everything bb saved in Lobu.
 
-The header names the account and the Lobu bb talks to, and a **context
-picker** switches the login bb uses without leaving the page — the inbox,
-memories, connections, and bb's own saves and searches all follow it.
-**Open in browser** opens the personal workspace. Each section loads on its
-own, so a slow or failing Lobu call leaves the rest of the page usable.
+Inside a thread, the Lobu panel shows the same for that thread. Switch the
+login bb uses in Settings → Plugins → Lobu; search all of Lobu in Lobu itself.
 
 ## Memory
 
@@ -88,14 +85,13 @@ It works as a loop:
 - **Agents save and supersede what they learn.** A `lobu_remember` tool (and
   `bb lobu remember` CLI command) saves decisions, non-obvious facts, and
   standing preferences, at most three at a time and each with an evidence
-  quote. Each memory is linked to Lobu entities only on certain evidence: the
-  full names the agent lists in `mentions` (`--mentions`) when exactly one record
-  in the destination workspace has that name (Lobu resolves it when the memory
-  is saved), and explicit `entityIds` that are records there. The project's
-  repository is one such mention, listed only when the memory is about that
-  codebase or product. Partial names, shared names, and member records are
-  never linked, and the agent is told which mentions stayed unlinked and why.
-  This needs a Lobu server whose save_memory accepts names in `entity_ids`. The plugin never
+  quote. A memory is a note first: it links to Lobu records only by
+  `entityIds` (`--entity-ids`) the agent was shown, in the brief or in
+  `lobu_search`'s matched entities, never by a guessed name. When exactly one
+  record in your personal workspace is named after the project's repository,
+  the brief gives its id for memories about that codebase. An id that is not
+  a record in the destination workspace is dropped, and the agent is told
+  what each memory linked to, with the record's type. The plugin never
   creates entities. Passing `replacesEventId` (`--replaces-id`) supersedes an outdated
   memory instead of leaving both active. With **Save memories automatically**
   on (the default), saves go straight to your personal workspace, and anything
