@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0
 
 - Memories link to Lobu records only by ids the agent was shown, never by
   name: `mentions` and `--mentions` are gone, since a guessed name could link
