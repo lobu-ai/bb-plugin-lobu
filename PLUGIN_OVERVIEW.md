@@ -12,7 +12,8 @@ Keep what your agents learn in Lobu memory, without leaving bb.
   `lobu_remember` tools plus `bb lobu search` and `bb lobu remember` CLI
   commands for ACP providers.
 - **Save to Lobu** on any message, and **Save learnings to Lobu** for a whole
-  thread, through a review form.
+  thread. Saves need no review; you are asked only when a new memory
+  contradicts a saved one.
 - **Open what bb saved in Lobu** opens Lobu's own page of those memories.
 - The New thread screen shows what new threads in the project start with,
   each memory under the thread that taught it, and the project's recent

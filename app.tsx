@@ -9,9 +9,9 @@ import {
 import { LobuHome } from "@/components/home";
 import { SetupSettings } from "@/components/setup";
 import { ThreadMemoryPanel } from "@/components/memory";
-import { RememberFormView } from "@/components/remember-form";
+import { ConflictFormView } from "@/components/conflict-form";
 import { z } from "zod";
-import { learnResultSchema, REMEMBER_RENDERER, rememberResultSchema } from "@/lib/memory-contract";
+import { CONFLICT_RENDERER, learnResultSchema, rememberResultSchema } from "@/lib/memory-contract";
 
 const PLUGIN_ID = "lobu";
 
@@ -19,7 +19,8 @@ const PLUGIN_ID = "lobu";
 // app-wide data hook hands it over. It is the same client for every thread.
 let sdk: PluginBrowserBbSdk | null = null;
 
-async function openReview(threadId: string, text: string) {
+/** Saves the picked text to Lobu; it shows in the thread's Lobu memory panel, where it can be undone. */
+async function saveToLobu(threadId: string, text: string) {
   if (sdk === null) throw new Error("Lobu is still loading. Try again in a moment.");
   const result = await sdk.plugins.callRpc({
     pluginId: PLUGIN_ID,
@@ -49,16 +50,16 @@ export default definePluginApp((app) => {
     component: ThreadMemoryPanel,
   });
 
-  // The review form shown in place of the composer.
-  app.slots.pendingInteraction({ id: REMEMBER_RENDERER, component: RememberFormView });
+  // Shown in place of the composer only when a new memory contradicts a saved one.
+  app.slots.pendingInteraction({ id: CONFLICT_RENDERER, component: ConflictFormView });
 
-  // "Remember this": a message, or the text selected in it, straight into the form.
+  // "Remember this": a message, or the text selected in it, saved straight to Lobu.
   app.slots.messageAction({
     id: "save-to-lobu",
     title: "Save to Lobu",
     icon: "lobu/lobu",
     run: ({ threadId, message, selectedText }) =>
-      openReview(threadId, selectedText?.trim() ? selectedText : message.text),
+      saveToLobu(threadId, selectedText?.trim() ? selectedText : message.text),
   });
 
   // Lobu's own page of everything bb saved.
@@ -83,7 +84,7 @@ export default definePluginApp((app) => {
     }),
   });
 
-  // Ask the thread's agent to propose what is worth keeping.
+  // Ask the thread's agent to save what is worth keeping.
   app.slots.experimental_threadAction({
     id: "save-learnings",
     title: "Save learnings to Lobu",

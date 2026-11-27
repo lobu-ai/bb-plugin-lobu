@@ -1,6 +1,6 @@
 // Distill on archive: when a thread is archived, a hidden recap thread reads
 // it and saves what is worth keeping. Nobody is looking at an archived thread,
-// so recaps run only with auto-save on.
+// so a recap saves what does not conflict and leaves contradictions unsaved.
 import { z } from "zod";
 
 /** Recent part of the conversation the recap reads; older text is dropped first. */
@@ -85,7 +85,7 @@ export function recapPrompt(title: string, transcript: string, project: { repo: 
     "",
     "Most threads contain nothing worth keeping; the expected answer is \"Nothing to keep.\" Propose a memory only if a different agent, working on a different task in this workspace next month, would act differently because of it. Never propose: what this thread built or changed (that is git history), anything a README, AGENTS.md, code comment, or schema already states, generic quality wishes (\"keep it fast/clean\"), task instructions restated as preferences, or one-off values only this thread needs. A preference only when the user stated it as a standing rule, not as a requirement for this task; the user saying it is the evidence, so do not hold it back as unverified. Propose at most three; one strong memory beats three weak ones.",
     "",
-    "Each memory needs a short evidence quote: the user turn or agent finding it came from. You may read files in the thread's workspace to check a candidate is not already stated in the repo; do not run commands, edit files, or call any other tool. If a memory clearly belongs to a specific Lobu workspace, name it in `workspace`; else leave it null.",
+    "Each memory needs a short evidence quote: the user turn or agent finding it came from. You may read files in the thread's workspace to check a candidate is not already stated in the repo; do not run commands, edit files, or call any other tool.",
     ...(project === null
       ? []
       : [

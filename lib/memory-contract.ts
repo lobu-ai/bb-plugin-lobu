@@ -12,10 +12,10 @@ export const memoryDraftSchema = z.object({
   kind: z.enum(memoryKinds),
   /** Short quote of the user turn or agent finding the memory came from. Absent on older queued drafts. */
   evidence: z.string().trim().max(500).nullish(),
-  /** Workspace slug or name the memory belongs to; null lets the server pick. Absent on older queued drafts. */
-  workspace: z.string().trim().min(1).nullish(),
   /** Event id of an older saved memory this one corrects or replaces (shown in lobu_search and the project brief). */
   replacesEventId: z.number().int().positive().nullish(),
+  /** Event id of a saved memory this one contradicts when the conversation does not show which is right; the user picks. */
+  conflictsWithEventId: z.number().int().positive().nullish(),
   /** Lobu record ids the agent was shown (in the brief or lobu_search) and this memory is about. */
   entityIds: z.array(z.number().int().positive()).nullish(),
 });
@@ -34,27 +34,39 @@ export const memoryProposalSchema = memoryDraftSchema
   }));
 export type MemoryProposal = z.output<typeof memoryProposalSchema>;
 
-/** What the review form shows. Drafts stay capped at ten so recaps queued by older tool versions still parse. */
-export const rememberFormSchema = z.object({
-  drafts: z.array(memoryDraftSchema).min(1).max(10),
-  workspaces: z.array(z.object({ slug: z.string(), name: z.string() })),
-  workspace: z.string().nullable(),
-  /** Why this workspace is preselected, e.g. draft hints disagreeing; null when unremarkable. */
-  workspaceNote: z.string().nullable(),
+/** The conflict form's renderer id, shared by requestInput and the pendingInteraction slot. */
+export const CONFLICT_RENDERER = "memory-conflict";
+
+/** A new memory that contradicts one Lobu already holds: the only thing the user is ever asked about. */
+export const memoryConflictSchema = z.object({
+  workspace: z.string(),
+  proposed: memoryDraftSchema,
+  existing: z.object({
+    /** Where the saved memory lives: the personal workspace, or another one lobu_search or the brief showed. */
+    workspace: z.string(),
+    eventId: z.number().int().positive(),
+    title: z.string(),
+    content: z.string(),
+    url: z.string().nullable(),
+  }),
 });
-export type RememberForm = z.infer<typeof rememberFormSchema>;
+export type MemoryConflict = z.infer<typeof memoryConflictSchema>;
 
-/** What the review form submits: only the memories the user kept, as edited. The cap stays above the tool's so a kept subset always validates. */
-export const rememberSubmissionSchema = z.object({
-  workspace: z.string().min(1),
-  memories: z.array(memoryDraftSchema).max(10),
+/** What the conflict form shows: the memories of one lobu_remember call that contradict saved ones. */
+export const conflictFormSchema = z.object({ conflicts: z.array(memoryConflictSchema).min(1).max(3) });
+export type ConflictForm = z.infer<typeof conflictFormSchema>;
+
+/** How the user settled each conflict, in form order: the new memory replaces the old, both stay, or the new one is dropped. */
+export const conflictChoices = ["replace", "keep-both", "discard"] as const;
+export type ConflictChoice = (typeof conflictChoices)[number];
+export const conflictResolutionSchema = z.object({ choices: z.array(z.enum(conflictChoices)).min(1).max(3) });
+
+/** What a hand-picked "Save to Lobu" did: the title it saved, or why it saved nothing. */
+export const rememberResultSchema = z.object({
+  saved: z.string().nullable(),
+  duplicate: z.boolean(),
+  error: z.string().nullable(),
 });
-export type RememberSubmission = z.infer<typeof rememberSubmissionSchema>;
-
-/** The form's renderer id, shared by requestInput and the pendingInteraction slot. */
-export const REMEMBER_RENDERER = "remember";
-
-export const rememberResultSchema = z.object({ opened: z.boolean(), error: z.string().nullable() });
 export const learnResultSchema = z.object({ sent: z.boolean() });
 
 /** A memory the plugin saved on the user's behalf, with how often agents found it since. */

@@ -405,9 +405,11 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
   let instructions: ((ctx: { threadId: string; projectId: string }) => string | null) | null = null;
   let rpc: Record<string, (input: unknown) => unknown> = {};
   let cli: PluginCliRegistration | null = null;
-  const formRequests: unknown[] = [];
+  const formRequests: { payload: unknown }[] = [];
+  /** What the user submits in the next forms, in order; with none left, a form is dismissed. */
+  const formAnswers: unknown[] = [];
   const mentionProviders: { id: string; search: (ctx: unknown) => Promise<unknown[]>; resolve: (id: string) => Promise<unknown> }[] = [];
-  const values = { autoSave: true, recapOnArchive: false, ...overrides };
+  const values = { recapOnArchive: false, ...overrides };
   const bb = {
     pluginId: "lobu",
     settings: {
@@ -450,9 +452,12 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
       },
     },
     ui: {
-      requestInput: async (request: unknown) => {
+      requestInput: async (request: { payload: unknown; describeSubmission?: (value: unknown) => unknown }) => {
         formRequests.push(request);
-        return { outcome: "cancelled", reason: "user" };
+        if (formAnswers.length === 0) return { outcome: "cancelled", reason: "user" };
+        const value = formAnswers.shift();
+        await request.describeSubmission?.(value);
+        return { outcome: "submitted", value };
       },
       registerMentionProvider: (provider: (typeof mentionProviders)[number]) => void mentionProviders.push(provider),
     },
@@ -466,7 +471,7 @@ async function startPlugin(overrides: Record<string, unknown> = {}) {
     tools.get(name)!.execute(params, { threadId, projectId, signal: new AbortController().signal });
   const runCli = (argv: string[], threadId = "thread-1", projectId = "proj-1") =>
     cli!.run(argv, { threadId, projectId, signal: new AbortController().signal });
-  return { kv, rpc, call, runCli, formRequests, mentions: mentionProviders, brief: (threadId: string, projectId = "proj-1") => instructions!({ threadId, projectId }) };
+  return { kv, rpc, call, runCli, formRequests, formAnswers, mentions: mentionProviders, brief: (threadId: string, projectId = "proj-1") => instructions!({ threadId, projectId }) };
 }
 
 /**
@@ -502,7 +507,7 @@ describe("the memory loop", () => {
     const { rpc, call, brief } = await startPlugin();
     expect(brief("thread-0")).toBeNull();
 
-    // Auto-save goes to the personal workspace.
+    // Saves go to the personal workspace without asking.
     const saved = String(await call("lobu_remember", { memories: [deployGotcha, prPreference] }));
     expect(saved).toContain("Saved to the user's personal Lobu workspace (me)");
     // Neither memory names a record, so neither is linked; not even to the project's repo.
@@ -615,13 +620,82 @@ describe("the memory loop", () => {
     expect(url).toContain(String(final.saved.find((r) => r.title === deployGotcha.title)!.eventId));
   });
 
-  test("with auto-save off, memories go through the review form", async () => {
-    const { call, formRequests } = await startPlugin({ autoSave: false });
-    const before = lobu.memories.length;
-    const result = String(await call("lobu_remember", { memories: [prPreference] }, "thread-9"));
+  test("saves without asking; only a contradiction reaches the user, and nothing is saved until they choose", async () => {
+    const { call, rpc, runCli, formRequests, formAnswers } = await startPlugin();
+    const branchRule = {
+      title: "Deploys run from the release branch",
+      content: "Production deploys are cut from the release branch, never from main.",
+      kind: "decision",
+      evidence: "User: we always deploy from release",
+    };
+    expect(String(await call("lobu_remember", { memories: [branchRule] }, "thread-9"))).toContain("Saved to the user's personal Lobu workspace (me)");
+    const existing = lobu.memories.find((m) => m.title === branchRule.title)!;
+
+    // The user's own pick from the timeline is saved at once, with no form.
+    const picked = (await rpc.remember!({ threadId: "thread-9", text: "Release notes live in docs/releases\nOne file per version." })) as {
+      saved: string | null;
+      duplicate: boolean;
+      error: string | null;
+    };
+    expect(picked).toEqual({ saved: "Release notes live in docs/releases", duplicate: false, error: null });
+    expect(formRequests).toHaveLength(0);
+
+    const contradiction = {
+      title: "Deploys run from main",
+      content: "Production deploys are cut from main now; the release branch is gone.",
+      kind: "decision",
+      evidence: "Agent: the release branch no longer exists on the remote",
+      conflictsWithEventId: existing.id,
+    };
+    // Dismissed: the form showed both memories and nothing new was saved.
+    const dismissed = String(await call("lobu_remember", { memories: [contradiction] }, "thread-9"));
     expect(formRequests).toHaveLength(1);
-    expect(result).toContain("chose not to save");
-    expect(lobu.memories).toHaveLength(before);
+    expect(formRequests[0]?.payload).toMatchObject({
+      conflicts: [{ workspace: "me", proposed: { title: contradiction.title }, existing: { eventId: existing.id, title: branchRule.title } }],
+    });
+    expect(dismissed).toContain("closed the memory conflict without choosing");
+    expect(lobu.memories.some((m) => m.title === contradiction.title)).toBe(false);
+
+    // "Use the new one" supersedes the saved memory.
+    formAnswers.push({ choices: ["replace"] });
+    const replaced = String(await call("lobu_remember", { memories: [contradiction] }, "thread-9"));
+    const saved = lobu.memories.find((m) => m.title === contradiction.title)!;
+    expect(replaced).toContain(`"${contradiction.title}" replaced "${branchRule.title}"`);
+    expect(existing.supersededBy).toBe(saved.id);
+
+    // From the CLI the form opens without holding the command; "Keep both" saves alongside.
+    formAnswers.push({ choices: ["keep-both"] });
+    const cli = await runCli(
+      ["remember", "--title", "Hotfixes deploy from main", "--content", "Hotfixes skip release and deploy straight from main.", "--kind", "decision", "--evidence", "User: hotfixes go out from main", "--conflicts-with-id", String(saved.id)],
+      "thread-9",
+    );
+    expect(cli.stdout).toContain("Asked the user in the thread which memory to keep");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(lobu.memories.find((m) => m.title === "Hotfixes deploy from main")).toBeDefined();
+    expect(saved.supersededBy).toBeNull();
+
+    // A contradiction of a memory Lobu no longer holds is just saved.
+    const stale = String(
+      await call("lobu_remember", { memories: [{ ...contradiction, title: "Deploy window is Tuesday", content: "Deploys happen on Tuesdays.", conflictsWithEventId: 987654 }] }, "thread-9"),
+    );
+    expect(stale).toContain("Saved to the user's personal Lobu workspace (me)");
+    expect(stale).toContain("event 987654 is not a memory in any Lobu workspace bb reaches");
+    expect(formRequests).toHaveLength(3);
+
+    // A contradiction of a team memory is asked about too, and "Use the new one" replaces it in that workspace.
+    const teamRule = { id: lobu.nextId++, workspace: "team", title: "Staging deploys freeze on Fridays", content: "No staging deploys on Fridays.", kind: "decision", entityIds: [], deleted: false, supersededBy: null as number | null };
+    lobu.memories.push(teamRule);
+    formAnswers.push({ choices: ["replace"] });
+    const team = String(
+      await call("lobu_remember", { memories: [{ ...contradiction, title: "Staging deploys run any day", content: "Staging deploys are allowed every day now.", conflictsWithEventId: teamRule.id }] }, "thread-9"),
+    );
+    expect(formRequests[3]?.payload).toMatchObject({
+      conflicts: [{ workspace: "me", existing: { workspace: "team", eventId: teamRule.id, url: expect.stringContaining(`/team/events/${teamRule.id}`) } }],
+    });
+    expect(team).toContain(`replaced "${teamRule.title}" in team`);
+    const teamReplacement = lobu.memories.find((m) => m.title === "Staging deploys run any day")!;
+    expect(teamReplacement.workspace).toBe("team");
+    expect(teamRule.supersededBy).toBe(teamReplacement.id);
   });
 
   test("signed out, the agent's Lobu tools say so quietly instead of failing", async () => {

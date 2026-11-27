@@ -35,6 +35,10 @@ const MAX_TITLE_CHARS = 200;
 const MAX_QUERY_CHARS = 200;
 /** Headroom under the 256KB limit, leaving room for the other KV keys' values. */
 const MAX_THREAD_LOG_BYTES = 200_000;
+/** The same headroom for saved memories, which carry their full text. */
+const MAX_SAVED_BYTES = 200_000;
+/** threadId of memories read from Lobu rather than saved by this plugin. */
+const HYDRATED_THREAD = "lobu";
 /** bb truncates a plugin's thread instructions at 4096 characters; stay under it. */
 const BRIEF_BUDGET = 3800;
 const ITEM_CHARS = 320;
@@ -73,10 +77,57 @@ export function parseThreadLogs(value: unknown): Record<string, ThreadLog> {
   );
 }
 
+/** UTF-8 size of a value as JSON: bb's KV limit counts bytes, and non-Latin text is up to 4 per character. */
+function jsonBytes(value: unknown): number {
+  return utf8.encode(JSON.stringify(value)).length;
+}
+const utf8 = new TextEncoder();
+
 /** Newest first, capped. */
 export function addSaved(list: SavedRecord[], records: SavedRecord[]): SavedRecord[] {
   const ids = new Set(records.map((record) => record.eventId));
-  return [...records, ...list.filter((record) => !ids.has(record.eventId))].slice(0, MAX_SAVED);
+  return capSaved([...records, ...list.filter((record) => !ids.has(record.eventId))]);
+}
+
+/**
+ * Keeps saved memories inside the plugin KV value limit (256KB) and MAX_SAVED,
+ * in their order. Memories this plugin saved win over ones read back from Lobu,
+ * which Lobu still holds and the next sync can read again.
+ */
+export function capSaved(list: SavedRecord[]): SavedRecord[] {
+  const kept = new Set<SavedRecord>();
+  let bytes = 2; // "[]"
+  const own = list.filter((record) => record.threadId !== HYDRATED_THREAD);
+  const hydrated = list.filter((record) => record.threadId === HYDRATED_THREAD);
+  for (const record of [...own, ...hydrated]) {
+    if (kept.size >= MAX_SAVED) break;
+    const size = jsonBytes(record) + 1;
+    if (bytes + size > MAX_SAVED_BYTES) continue;
+    bytes += size;
+    kept.add(record);
+  }
+  return kept.size === list.length ? list : list.filter((record) => kept.has(record));
+}
+
+/**
+ * The live memory an event id stands for in one workspace's read_knowledge
+ * lineage result, following supersede chains to the head: "deleted" when it was
+ * deleted there, null when that workspace holds no memory with the id.
+ */
+export function liveMemory(
+  result: unknown,
+  eventId: number,
+): { id: number; title: string; content: string } | "deleted" | null {
+  const byId = new Map(parseKnowledgeItems(result).map((item) => [item.id, item]));
+  let cur = byId.get(eventId);
+  if (cur === undefined || cur.kind === null) return null;
+  const seen = new Set<number>();
+  while (cur !== undefined && cur.supersededBy !== null && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    cur = byId.get(cur.supersededBy);
+  }
+  if (cur === undefined || cur.isSuperseded || cur.semanticType === "tombstone") return "deleted";
+  return { id: cur.id, title: cur.title, content: cur.content };
 }
 
 /**
@@ -152,7 +203,7 @@ export function capThreadLogs(logs: Record<string, ThreadLog>): Record<string, T
   for (const [id, log] of entries) {
     if (kept.length >= MAX_THREAD_LOGS) break;
     const trimmed = trimThreadLog(log);
-    const size = JSON.stringify({ [id]: trimmed }).length + (kept.length === 0 ? 0 : 1);
+    const size = jsonBytes({ [id]: trimmed }) + (kept.length === 0 ? 0 : 1);
     if (kept.length > 0 && bytes + size > MAX_THREAD_LOG_BYTES) break;
     bytes += size;
     kept.push([id, trimmed]);
@@ -581,7 +632,7 @@ export function reconcileWorkspaceMemories(input: {
         content: item.content,
         kind: item.kind as MemoryKind,
         url: `${baseUrl}/${workspace}/events/${item.id}`,
-        threadId: "lobu",
+        threadId: HYDRATED_THREAD,
         projectId: null,
         entityIds: item.entityIds ?? null,
         savedAt: item.savedAt,
@@ -590,12 +641,11 @@ export function reconcileWorkspaceMemories(input: {
       });
     }
     if (hydrated.length > 0) {
-      saved = [...saved, ...hydrated]
-        .sort((a, b) => b.savedAt - a.savedAt)
-        .slice(0, MAX_SAVED);
-      changed = true;
+      saved = [...saved, ...hydrated].sort((a, b) => b.savedAt - a.savedAt);
     }
   }
 
-  return { saved, pins, changed };
+  const capped = capSaved(saved);
+  const differs = capped.length !== input.saved.length || capped.some((record, index) => record !== input.saved[index]);
+  return { saved: capped, pins, changed: changed || differs };
 }
