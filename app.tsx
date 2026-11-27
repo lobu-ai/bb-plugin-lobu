@@ -46,7 +46,9 @@ export default definePluginApp((app) => {
   });
 
   // What this thread started with, looked up, and saved, with undo and pin.
-  app.slots.threadPanelAction({
+  app.slots.experimental_tab({
+    context: { kind: "thread" },
+    availability: "action",
     id: "memory",
     title: "Lobu",
     icon: "lobu/memory",

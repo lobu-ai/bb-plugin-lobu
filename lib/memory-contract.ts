@@ -38,7 +38,7 @@ export type MemoryProposal = z.output<typeof memoryProposalSchema>;
 export const CONFLICT_RENDERER = "memory-conflict";
 
 /** A new memory that contradicts one Lobu already holds: the only thing the user is ever asked about. */
-export const memoryConflictSchema = z.object({
+const memoryConflictSchema = z.object({
   workspace: z.string(),
   proposed: memoryDraftSchema,
   existing: z.object({
@@ -54,10 +54,9 @@ export type MemoryConflict = z.infer<typeof memoryConflictSchema>;
 
 /** What the conflict form shows: the memories of one lobu_remember call that contradict saved ones. */
 export const conflictFormSchema = z.object({ conflicts: z.array(memoryConflictSchema).min(1).max(3) });
-export type ConflictForm = z.infer<typeof conflictFormSchema>;
 
 /** How the user settled each conflict, in form order: the new memory replaces the old, both stay, or the new one is dropped. */
-export const conflictChoices = ["replace", "keep-both", "discard"] as const;
+const conflictChoices = ["replace", "keep-both", "discard"] as const;
 export type ConflictChoice = (typeof conflictChoices)[number];
 export const conflictResolutionSchema = z.object({ choices: z.array(z.enum(conflictChoices)).min(1).max(3) });
 
@@ -134,7 +133,7 @@ export const pinnedMemorySchema = z.object({
 export type PinnedMemory = z.infer<typeof pinnedMemorySchema>;
 
 /** One memory a Lobu search returned. */
-export const memoryHitSchema = z.object({
+const memoryHitSchema = z.object({
   eventId: z.number(),
   workspace: z.string(),
   title: z.string(),
@@ -147,7 +146,7 @@ export const memoryHitSchema = z.object({
 export type MemoryHit = z.infer<typeof memoryHitSchema>;
 
 /** One entity matching a Lobu search or mention query. */
-export const entityHitSchema = z.object({
+const entityHitSchema = z.object({
   id: z.number(),
   type: z.string(),
   name: z.string(),
@@ -176,7 +175,7 @@ const workspaceOptionSchema = z.object({ slug: z.string(), name: z.string() });
 
 /** A bb project with its Lobu link, pins, and what its new threads start with. */
 /** A memory as a brief gives it: its text, its Lobu link, and the bb thread that saved it. */
-export const briefItemSchema = z.object({
+const briefItemSchema = z.object({
   eventId: z.number().nullable(),
   workspace: z.string(),
   title: z.string(),

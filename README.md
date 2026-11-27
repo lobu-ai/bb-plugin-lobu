@@ -166,7 +166,7 @@ other tool call is refused. Links to Lobu records open their Lobu page.
 
 ## Requirements
 
-- bb 0.46 or newer.
+- bb 0.49 or newer.
 - bun or npm, so the plugin can install the Lobu CLI for you. Without either,
   install `@lobu/cli` yourself.
 

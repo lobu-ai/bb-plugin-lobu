@@ -14,7 +14,7 @@ const MAX_CALL_TITLE = 120;
  * `isViewRead` in `@lobu/core/contracts/tools/view-host`, which the published
  * package does not export.
  */
-export function isViewRead(tool: string, args: Record<string, unknown> | undefined): boolean {
+function isViewRead(tool: string, args: Record<string, unknown> | undefined): boolean {
   if (tool === "read_knowledge") return true;
   if (tool === "manage_entity") return args?.action === "list" || args?.action === "get" || args?.action === "list_links";
   if (tool === "manage_feeds") {
@@ -109,7 +109,7 @@ export interface ViewScope {
 export type ViewParams = Record<string, string | number | boolean>;
 
 /** Which scope fields combine: the rule `open_view` applies (`viewScopeShapeError` in core). */
-export function viewScopeShapeError(scope: ViewScope): string | null {
+function viewScopeShapeError(scope: ViewScope): string | null {
   if (scope.collection !== undefined && (!scope.type || scope.entity !== undefined || scope.event !== undefined)) {
     return "A collection selection needs a type, without an entity or event";
   }
@@ -181,11 +181,11 @@ export function coerceViewParams(declared: unknown, params: ViewParams): ViewPar
 /** Child views one view may show at once (`VIEW_EMBED_MAX_COUNT` in core). */
 export const VIEW_EMBED_MAX_COUNT = 8;
 /** Nesting below the directive's view: a child may embed, a grandchild may not. */
-export const VIEW_EMBED_MAX_DEPTH = 2;
+const VIEW_EMBED_MAX_DEPTH = 2;
 const VIEW_EMBED_MAX_PARAMS = 20;
 const MAX_KEY = 64;
 
-export interface EmbedBox {
+interface EmbedBox {
   x: number;
   y: number;
   width: number;

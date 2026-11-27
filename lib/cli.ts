@@ -81,7 +81,7 @@ export function mergePath(shellPath: string | null, inheritedPath: string | unde
 }
 
 /** The CLI binary: Bun's global bin, else the first `lobu` on the merged PATH. */
-export function resolveLobuBin(pathDirs: string[], home: string): string {
+function resolveLobuBin(pathDirs: string[], home: string): string {
   for (const dir of [join(home, ".bun", "bin"), ...pathDirs]) {
     const candidate = join(dir, "lobu");
     if (existsSync(candidate)) return candidate;

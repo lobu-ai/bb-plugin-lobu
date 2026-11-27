@@ -1252,9 +1252,19 @@ export default async function plugin(bb: BbPluginApi) {
     recapArchived(thread).catch((cause: unknown) => bb.log.warn(`Lobu recap of ${thread.id} failed: ${String(cause)}`));
   });
 
+  /** Every unarchived thread this plugin started, a page at a time. */
+  async function ownThreads() {
+    const page = 100;
+    const all = [];
+    for (let offset = 0; ; offset += page) {
+      const rows = await bb.sdk.threads.list({ originPluginId: bb.pluginId, includeHidden: true, archived: false, limit: page, offset });
+      all.push(...rows);
+      if (rows.length < page) return all;
+    }
+  }
+
   // A reload while a recap runs drops its wait, so finish any recap threads left behind.
-  void bb.sdk.threads
-    .list({ originPluginId: bb.pluginId, includeHidden: true, archived: false })
+  void ownThreads()
     .then((leftover) =>
       Promise.all(
         leftover.map((thread) =>
