@@ -57,6 +57,23 @@ export type SetupStatus = z.infer<typeof setupStatusSchema>;
 
 const approvalSchema = z.object({ approvalUrl: z.string().nullable() });
 
+/** A view in a workspace, as a `::lobu-view` directive names it. Lobu validates the key's characters. */
+const viewRefSchema = z.object({
+  workspace: z.string().trim().min(1).max(64),
+  view: z.string().trim().min(1).max(64),
+});
+
+/** What a view opens for, as `open_view` takes it; Lobu validates the combination. */
+const viewScopeSchema = z.object({
+  type: z.string().min(1).max(128).optional(),
+  entity: z.union([z.number().int().positive(), z.string().min(1).max(1024)]).optional(),
+  event: z.number().int().positive().optional(),
+  collection: z.unknown().optional(),
+});
+
+const viewParamsSchema = z
+  .record(z.string().max(64), z.union([z.string().max(2000), z.number(), z.boolean()]))
+  .refine((params) => Object.keys(params).length <= 50, "Too many view params");
 
 export const rpcContract = defineRpcContract({
   /** Whether bb can reach Lobu: the CLI and the login bb uses. */
@@ -177,5 +194,53 @@ export const rpcContract = defineRpcContract({
   linkProject: {
     input: z.object({ projectId: z.string(), workspace: z.string().min(1).nullable() }),
     output: projectMemorySchema,
+  },
+  /**
+   * Opens a view for a chat embed with the login bb uses, so no token reaches
+   * the page: Lobu's `open_view` checks the subject and types the params, then
+   * the shell is fetched. A source-key record is resolved to its stored id.
+   */
+  viewOpen: {
+    input: viewRefSchema.extend({ scope: viewScopeSchema, params: viewParamsSchema }),
+    output: z.object({
+      html: z.string(),
+      contentHash: z.string().nullable(),
+      /** The same view, subject and params on Lobu's web app. */
+      url: z.string(),
+      /** The subject as Lobu resolved it (an event's current version). */
+      scope: viewScopeSchema,
+      /** The params with their declared types and defaults. */
+      params: viewParamsSchema,
+    }),
+  },
+  /** The Lobu page of a record a view links to (`lobu/open-record`), read with the login's own access. */
+  viewOpenRecord: {
+    input: z.object({
+      workspace: viewRefSchema.shape.workspace,
+      record: z.object({
+        entity_id: z.union([z.number().int().positive(), z.string().min(1).max(1024)]),
+        entity_type: z.union([z.string().min(1).max(128), z.number().int().positive()]).optional(),
+      }),
+    }),
+    output: z.object({ url: z.string() }),
+  },
+  /**
+   * One `tools/call` from an embedded view: reads and the view's own declared
+   * actions run as the user; anything else is refused. The answer is the MCP
+   * tool result the guest expects.
+   */
+  viewCall: {
+    input: viewRefSchema.extend({
+      contentHash: z.string().nullable(),
+      /** The event the view is open on; an action made there names it. */
+      event: z.number().int().positive().optional(),
+      name: z.string().min(1).max(100),
+      arguments: z.record(z.string(), z.unknown()).optional(),
+    }),
+    output: z.object({
+      content: z.array(z.object({ type: z.literal("text"), text: z.string() })),
+      structuredContent: z.unknown().optional(),
+      isError: z.boolean().optional(),
+    }),
   },
 });

@@ -10,6 +10,7 @@ import { LobuHome } from "@/components/home";
 import { SetupSettings } from "@/components/setup";
 import { ThreadMemoryPanel } from "@/components/memory";
 import { ConflictFormView } from "@/components/conflict-form";
+import { LobuViewDirective } from "@/components/lobu-view";
 import { z } from "zod";
 import { CONFLICT_RENDERER, learnResultSchema, rememberResultSchema } from "@/lib/memory-contract";
 
@@ -35,6 +36,8 @@ export default definePluginApp((app) => {
   // The New thread screen: setup until bb is connected, then what a new
   // thread in the project starts with. Settings: the Lobu account.
   app.slots.homepageSection({ id: "lobu", title: "Lobu", component: LobuHome });
+  // `::lobu-view{workspace="…" view="…"}` in a reply renders that Lobu view inline.
+  app.slots.messageDirective({ id: "lobu-view", component: LobuViewDirective });
   app.slots.settingsSection({
     id: "account",
     title: "Lobu account",

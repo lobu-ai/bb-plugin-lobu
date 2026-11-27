@@ -330,7 +330,8 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
     return parsed;
   }
 
-  async function request(context: string | null, path: string, body?: unknown, method?: string): Promise<unknown> {
+  /** One signed-in call; any status but 401 comes back for the caller to read. */
+  async function send(context: string | null, path: string, body?: unknown, method?: string): Promise<Response> {
     // A 401 means the cached token expired; mint a fresh one once.
     for (const fresh of [false, true]) {
       const response = await fetch(`${baseUrl}${path}`, {
@@ -350,11 +351,16 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
           `Lobu rejected the login for ${contextLabel(context)}.`,
         );
       }
-      const text = await response.text();
-      if (!response.ok) throw new Error(`Lobu returned ${response.status} for ${path}: ${text.slice(0, 200)}`);
-      return JSON.parse(text);
+      return response;
     }
     throw new Error("unreachable");
+  }
+
+  async function request(context: string | null, path: string, body?: unknown, method?: string): Promise<unknown> {
+    const response = await send(context, path, body, method);
+    const text = await response.text();
+    if (!response.ok) throw new Error(`Lobu returned ${response.status} for ${path}: ${text.slice(0, 200)}`);
+    return JSON.parse(text);
   }
 
   /** Who this CLI context is signed in as, and the workspaces it is authorized for. */
@@ -691,6 +697,34 @@ export function createLobuApi({ baseUrl }: LobuApiOptions) {
           },
         ];
       });
+    },
+
+    /** A view's HTML shell, its runtime and compiled bundle inlined, and the content hash it was built from. */
+    async viewShell(context: string | null, workspace: string, view: string): Promise<{ html: string; contentHash: string | null }> {
+      const path = `/api/${encodeURIComponent(workspace)}/views/${encodeURIComponent(view)}/shell`;
+      const response = await send(context, path);
+      const html = await response.text();
+      if (response.status === 404) throw new Error(`The ${workspace} workspace has no view named ${view}.`);
+      if (!response.ok) throw new Error(`Lobu returned ${response.status} for the ${view} view: ${html.slice(0, 200)}`);
+      return { html, contentHash: response.headers.get("X-Lobu-View-Hash") };
+    },
+
+    /** The tool list as the login sees it in a workspace (names and annotations). */
+    async listTools(context: string | null, workspace: string): Promise<unknown> {
+      return request(context, `/api/${encodeURIComponent(workspace)}/tools`);
+    },
+
+    /** One POST whose JSON answer comes back with its status, error or not. */
+    async callJson(context: string | null, path: string, body: unknown): Promise<{ ok: boolean; status: number; json: unknown }> {
+      const response = await send(context, path, body);
+      const text = await response.text();
+      let json: unknown = null;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        // A non-JSON body (a proxy error page) reads as no answer.
+      }
+      return { ok: response.ok, status: response.status, json };
     },
   };
 }
