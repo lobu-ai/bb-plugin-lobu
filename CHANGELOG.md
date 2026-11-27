@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0
 
 - Memories save without asking. The `autoSave` setting and the review form are
   gone; hovering a message and choosing **Save to Lobu** saves it directly.
