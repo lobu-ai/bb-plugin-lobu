@@ -94,7 +94,7 @@ export function addSaved(list: SavedRecord[], records: SavedRecord[]): SavedReco
  * in their order. Memories this plugin saved win over ones read back from Lobu,
  * which Lobu still holds and the next sync can read again.
  */
-export function capSaved(list: SavedRecord[]): SavedRecord[] {
+function capSaved(list: SavedRecord[]): SavedRecord[] {
   const kept = new Set<SavedRecord>();
   let bytes = 2; // "[]"
   const own = list.filter((record) => record.threadId !== HYDRATED_THREAD);

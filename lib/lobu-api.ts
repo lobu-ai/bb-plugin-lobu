@@ -116,7 +116,7 @@ export function parseCliContexts(listed: unknown): CliContext[] {
 const isLoopback = (url: URL) => ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
 
 /** Cloud origin bb signs in to; the CLI's built-in `lobu` context points here. */
-export const CLOUD_ORIGIN = "https://app.lobu.ai";
+const CLOUD_ORIGIN = "https://app.lobu.ai";
 
 /** Classify a Lobu origin the way the Mac app does: local loopback, Cloud, or another Lobu. */
 export function kindOfOrigin(origin: string): "cloud" | "local" | "other" {

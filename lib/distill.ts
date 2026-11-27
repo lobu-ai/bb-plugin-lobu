@@ -64,7 +64,7 @@ export function transcriptFromEvents(rows: readonly unknown[]): Transcript {
 }
 
 /** Threads whose ending is mostly code fences or diff output recap as change logs. */
-export function tailLooksLikeChangelog(text: string): boolean {
+function tailLooksLikeChangelog(text: string): boolean {
   const tail = text.slice(-CHANGELOG_TAIL);
   const fences = (tail.match(/```/g) ?? []).length;
   const diffMarkers = tail

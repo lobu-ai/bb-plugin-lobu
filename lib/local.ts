@@ -78,7 +78,7 @@ export async function startLocal(
   });
 }
 
-export const logFile = (folders: LocalFolders) => join(folders.bb, "lobu.log");
+const logFile = (folders: LocalFolders) => join(folders.bb, "lobu.log");
 
 /** The last line `lobu run` logged, to explain why it stopped. */
 export function lastLogLine(folders: LocalFolders): string {

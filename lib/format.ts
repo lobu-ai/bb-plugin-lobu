@@ -1,6 +1,6 @@
 // Small display helpers for the thread panel and setup.
 
-export function relativeTime(iso: string | null): string | null {
+function relativeTime(iso: string | null): string | null {
   if (iso === null) return null;
   const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
   if (Number.isNaN(minutes)) return null;
