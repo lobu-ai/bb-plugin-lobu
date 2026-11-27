@@ -77,6 +77,12 @@ export function parseThreadLogs(value: unknown): Record<string, ThreadLog> {
   );
 }
 
+/** UTF-8 size of a value as JSON: bb's KV limit counts bytes, and non-Latin text is up to 4 per character. */
+function jsonBytes(value: unknown): number {
+  return utf8.encode(JSON.stringify(value)).length;
+}
+const utf8 = new TextEncoder();
+
 /** Newest first, capped. */
 export function addSaved(list: SavedRecord[], records: SavedRecord[]): SavedRecord[] {
   const ids = new Set(records.map((record) => record.eventId));
@@ -95,7 +101,7 @@ export function capSaved(list: SavedRecord[]): SavedRecord[] {
   const hydrated = list.filter((record) => record.threadId === HYDRATED_THREAD);
   for (const record of [...own, ...hydrated]) {
     if (kept.size >= MAX_SAVED) break;
-    const size = JSON.stringify(record).length + 1;
+    const size = jsonBytes(record) + 1;
     if (bytes + size > MAX_SAVED_BYTES) continue;
     bytes += size;
     kept.add(record);
@@ -104,18 +110,23 @@ export function capSaved(list: SavedRecord[]): SavedRecord[] {
 }
 
 /**
- * The live memory an event id stands for in a read_knowledge lineage result,
- * following supersede chains to the head; null when it was deleted or is missing.
+ * The live memory an event id stands for in one workspace's read_knowledge
+ * lineage result, following supersede chains to the head: "deleted" when it was
+ * deleted there, null when that workspace holds no memory with the id.
  */
-export function liveMemory(result: unknown, eventId: number): { id: number; title: string; content: string } | null {
+export function liveMemory(
+  result: unknown,
+  eventId: number,
+): { id: number; title: string; content: string } | "deleted" | null {
   const byId = new Map(parseKnowledgeItems(result).map((item) => [item.id, item]));
   let cur = byId.get(eventId);
+  if (cur === undefined || cur.kind === null) return null;
   const seen = new Set<number>();
   while (cur !== undefined && cur.supersededBy !== null && !seen.has(cur.id)) {
     seen.add(cur.id);
     cur = byId.get(cur.supersededBy);
   }
-  if (cur === undefined || cur.isSuperseded || cur.semanticType === "tombstone" || cur.kind === null) return null;
+  if (cur === undefined || cur.isSuperseded || cur.semanticType === "tombstone") return "deleted";
   return { id: cur.id, title: cur.title, content: cur.content };
 }
 
@@ -192,7 +203,7 @@ export function capThreadLogs(logs: Record<string, ThreadLog>): Record<string, T
   for (const [id, log] of entries) {
     if (kept.length >= MAX_THREAD_LOGS) break;
     const trimmed = trimThreadLog(log);
-    const size = JSON.stringify({ [id]: trimmed }).length + (kept.length === 0 ? 0 : 1);
+    const size = jsonBytes({ [id]: trimmed }) + (kept.length === 0 ? 0 : 1);
     if (kept.length > 0 && bytes + size > MAX_THREAD_LOG_BYTES) break;
     bytes += size;
     kept.push([id, trimmed]);

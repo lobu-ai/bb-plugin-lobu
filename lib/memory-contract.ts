@@ -42,6 +42,8 @@ export const memoryConflictSchema = z.object({
   workspace: z.string(),
   proposed: memoryDraftSchema,
   existing: z.object({
+    /** Where the saved memory lives: the personal workspace, or another one lobu_search or the brief showed. */
+    workspace: z.string(),
     eventId: z.number().int().positive(),
     title: z.string(),
     content: z.string(),

@@ -7,7 +7,9 @@
 - You are asked only on a contradiction: an agent passes
   `conflictsWithEventId` (`--conflicts-with-id`) naming the saved memory a new
   one contradicts, and a form shows both so you can replace it, keep both, or
-  keep the saved one. Nothing is saved until you choose.
+  keep the saved one. Nothing is saved until you choose. The saved memory can
+  live in any workspace the login reaches; replacing a team memory writes the
+  new one in that team workspace.
 - Automatic saves go to your personal workspace only. The `workspace` field
   and the CLI `--workspace` option are removed; share to a team workspace from
   the thread panel.

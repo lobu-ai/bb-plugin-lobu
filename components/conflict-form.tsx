@@ -43,12 +43,16 @@ function ConflictFields({
 }) {
   const [choices, setChoices] = useState<(ConflictChoice | null)[]>(() => conflicts.map(() => null));
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const single = conflicts.length === 1;
 
   const send = async (picked: ConflictChoice[]) => {
     setBusy(true);
+    setError(null);
     try {
       await onSubmit(picked);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
     }
@@ -69,10 +73,11 @@ function ConflictFields({
       </p>
       <ul className="space-y-3">
         {conflicts.map((conflict, index) => (
-          <li key={conflict.existing.eventId} className="space-y-2 rounded-md border border-border p-2">
+          // Keyed by position: the list is fixed for the form's life, and two drafts can contradict one memory.
+          <li key={index} className="space-y-2 rounded-md border border-border p-2">
             <div className="grid gap-2 sm:grid-cols-2">
               <Memory
-                label="Saved"
+                label={conflict.existing.workspace === conflict.workspace ? "Saved" : `Saved in ${conflict.existing.workspace}`}
                 title={conflict.existing.title}
                 content={conflict.existing.content}
                 url={conflict.existing.url}
@@ -100,6 +105,7 @@ function ConflictFields({
           </li>
         ))}
       </ul>
+      {error === null ? null : <p className="text-destructive">Could not apply: {error}</p>}
       <footer className="flex items-center justify-end gap-2">
         <span className="mr-auto text-xs text-muted-foreground">Skip keeps only what is already saved.</span>
         <Button size="sm" variant="ghost" onClick={() => void onSkip()} disabled={busy}>

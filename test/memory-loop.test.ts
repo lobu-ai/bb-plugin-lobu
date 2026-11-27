@@ -679,7 +679,23 @@ describe("the memory loop", () => {
       await call("lobu_remember", { memories: [{ ...contradiction, title: "Deploy window is Tuesday", content: "Deploys happen on Tuesdays.", conflictsWithEventId: 987654 }] }, "thread-9"),
     );
     expect(stale).toContain("Saved to the user's personal Lobu workspace (me)");
+    expect(stale).toContain("event 987654 is not a memory in any Lobu workspace bb reaches");
     expect(formRequests).toHaveLength(3);
+
+    // A contradiction of a team memory is asked about too, and "Use the new one" replaces it in that workspace.
+    const teamRule = { id: lobu.nextId++, workspace: "team", title: "Staging deploys freeze on Fridays", content: "No staging deploys on Fridays.", kind: "decision", entityIds: [], deleted: false, supersededBy: null as number | null };
+    lobu.memories.push(teamRule);
+    formAnswers.push({ choices: ["replace"] });
+    const team = String(
+      await call("lobu_remember", { memories: [{ ...contradiction, title: "Staging deploys run any day", content: "Staging deploys are allowed every day now.", conflictsWithEventId: teamRule.id }] }, "thread-9"),
+    );
+    expect(formRequests[3]?.payload).toMatchObject({
+      conflicts: [{ workspace: "me", existing: { workspace: "team", eventId: teamRule.id, url: expect.stringContaining(`/team/events/${teamRule.id}`) } }],
+    });
+    expect(team).toContain(`replaced "${teamRule.title}" in team`);
+    const teamReplacement = lobu.memories.find((m) => m.title === "Staging deploys run any day")!;
+    expect(teamReplacement.workspace).toBe("team");
+    expect(teamRule.supersededBy).toBe(teamReplacement.id);
   });
 
   test("signed out, the agent's Lobu tools say so quietly instead of failing", async () => {

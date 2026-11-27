@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SavedRecord } from "../lib/memory-contract";
 import {
+  addSaved,
   briefFor,
   capThreadLogs,
   countUses,
@@ -166,6 +167,22 @@ describe("saved memory budget", () => {
     // Syncing the same list again changes nothing, so it is not written again.
     const again = reconcileWorkspaceMemories({ workspace: "me", baseUrl: "https://lobu.example", saved: result.saved, pins: {}, listResult });
     expect(again.changed).toBe(false);
+  });
+
+  test("counts bytes, so memories in a non-Latin script still fit kv", () => {
+    // Each of these characters is 3 bytes in UTF-8, so counting characters would let the list grow to ~3x the limit.
+    const wide = "記憶".repeat(1000);
+    const own = Array.from({ length: 120 }, (_, i) => record({ eventId: i + 1, content: wide, savedAt: i }));
+    const capped = addSaved([], own);
+    expect(new TextEncoder().encode(JSON.stringify(capped)).length).toBeLessThan(256 * 1024);
+    expect(capped[0]!.eventId).toBe(1);
+
+    const result = (n: number) => ({ eventId: n, workspace: "me", title: `記憶 ${n}`, content: wide, url: null, similarity: null, occurredAt: null });
+    const search = (at: number) => ({ query: "記憶".repeat(100), at, results: Array.from({ length: 20 }, (_, n) => result(n)) });
+    const many = Object.fromEntries(
+      Array.from({ length: 200 }, (_, i) => [`thread-${i}`, { given: [], searches: Array.from({ length: 30 }, (_, j) => search(i + j)), updatedAt: i }]),
+    );
+    expect(new TextEncoder().encode(JSON.stringify(capThreadLogs(many))).length).toBeLessThan(256 * 1024);
   });
 });
 

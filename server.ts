@@ -785,6 +785,8 @@ export default async function plugin(bb: BbPluginApi) {
     /** Drafts held back because they contradict a saved memory; the user settles them. */
     conflicts: MemoryConflict[];
     failed: { title: string; error: string }[];
+    /** Saved drafts whose conflictsWithEventId named no memory bb could read, for the agent. */
+    notes: string[];
     /** Why explicit ids were not linked, for the agent. */
     unlinked: string[];
     /** What each saved memory was linked to, by event id, without Lobu's own ($) records. */
@@ -904,21 +906,37 @@ export default async function plugin(bb: BbPluginApi) {
     };
   }
 
-  /** The memory a draft says it contradicts, when Lobu still holds it in the draft's workspace. */
+  /**
+   * The memory a draft says it contradicts. lobu_search and the brief also show
+   * memories from other workspaces the login reaches, so those are read after
+   * the personal one. "deleted" when Lobu no longer holds it, so there is
+   * nothing to settle; "unreadable" when no reachable workspace has it.
+   */
   async function conflictOf(
     target: { slug: string; owner: WorkspaceOwner },
     draft: MemoryDraft,
-  ): Promise<MemoryConflict | null> {
+  ): Promise<MemoryConflict | "deleted" | "unreadable" | null> {
     const eventId = draft.conflictsWithEventId;
     if (!eventId || eventId === draft.replacesEventId) return null;
-    const live = liveMemory(await api.readEvents(target.owner.context, target.slug, [eventId]), eventId);
-    if (live === null) return null;
-    const { origin: baseUrl } = await reachLobu();
-    return {
-      workspace: target.slug,
-      proposed: draft,
-      existing: { eventId: live.id, title: live.title, content: live.content, url: `${baseUrl}/${target.slug}/events/${live.id}` },
-    };
+    const others = [...(await memoryOwners())].filter(([slug]) => slug !== target.slug).map(([slug, owner]) => ({ slug, owner }));
+    for (const place of [target, ...others]) {
+      const found = liveMemory(await api.readEvents(place.owner.context, place.slug, [eventId]).catch(() => null), eventId);
+      if (found === null) continue;
+      if (found === "deleted") return "deleted";
+      const { origin: baseUrl } = await reachLobu();
+      return {
+        workspace: target.slug,
+        proposed: draft,
+        existing: {
+          workspace: place.slug,
+          eventId: found.id,
+          title: found.title,
+          content: found.content,
+          url: `${baseUrl}/${place.slug}/events/${found.id}`,
+        },
+      };
+    }
+    return "unreadable";
   }
 
   /**
@@ -938,6 +956,7 @@ export default async function plugin(bb: BbPluginApi) {
       duplicates: [],
       conflicts: [],
       failed: [],
+      notes: [],
       unlinked: [],
       linked: new Map(),
     };
@@ -963,12 +982,17 @@ export default async function plugin(bb: BbPluginApi) {
         for (const line of links.unlinked) unlinked.add(line);
         const confirmed = { ...draft, entityIds: links.ids[0] ?? [] };
         const conflict = await conflictOf(target, confirmed);
-        if (conflict !== null) {
+        if (typeof conflict === "object" && conflict !== null) {
           outcome.conflicts.push(conflict);
           continue;
         }
         const record = await saveDraft(target, threadId, projectId, { ...confirmed, conflictsWithEventId: null });
         outcome.saved.push(record);
+        if (conflict === "unreadable") {
+          outcome.notes.push(
+            `"${draft.title}" was saved without asking: event ${draft.conflictsWithEventId} is not a memory in any Lobu workspace bb reaches.`,
+          );
+        }
         replacements.push({ replacedEventId: draft.replacesEventId, record });
       } catch (cause) {
         outcome.failed.push({ title: draft.title, error: cause instanceof Error ? cause.message : String(cause) });
@@ -1002,6 +1026,7 @@ export default async function plugin(bb: BbPluginApi) {
       for (const duplicate of outcome.duplicates) lines.push(`- ${duplicate.title} (matches "${duplicate.existing.title}")`);
     }
     for (const failure of outcome.failed) lines.push(`Not saved: ${failure.title} (${failure.error})`);
+    lines.push(...outcome.notes);
     if (outcome.saved.length > 0 && outcome.unlinked.length > 0) {
       lines.push("Left unlinked:", ...outcome.unlinked.map((line) => `- ${line}`));
     }
@@ -1032,7 +1057,7 @@ export default async function plugin(bb: BbPluginApi) {
     signal?: AbortSignal,
   ): Promise<{ lines: string[]; saved: SavedRecord[] }> {
     const owners = await memoryOwners();
-    const settled: { lines: string[]; saved: SavedRecord[] } = { lines: [], saved: [] };
+    const settled: { lines: string[]; saved: SavedRecord[]; applied: boolean } = { lines: [], saved: [], applied: false };
     const result = await bb.ui.requestInput(
       {
         threadId,
@@ -1048,37 +1073,48 @@ export default async function plugin(bb: BbPluginApi) {
         async describeSubmission(value) {
           const { choices } = conflictResolutionSchema.parse(value);
           const replacements: { replacedEventId?: number | null; record: SavedRecord }[] = [];
-          for (const [index, conflict] of conflicts.entries()) {
-            const choice = choices[index] ?? "discard";
-            const { proposed, existing } = conflict;
-            if (choice === "discard") {
-              settled.lines.push(`- Kept "${existing.title}"; "${proposed.title}" was not saved.`);
-              continue;
+          const replaced = new Set<number>();
+          try {
+            for (const [index, conflict] of conflicts.entries()) {
+              const { proposed, existing } = conflict;
+              // A saved memory is replaced once; a second pick for it keeps both.
+              const picked = choices[index] ?? "discard";
+              const choice = picked === "replace" && replaced.has(existing.eventId) ? "keep-both" : picked;
+              if (choice === "discard") {
+                settled.lines.push(`- Kept "${existing.title}"; "${proposed.title}" was not saved.`);
+                continue;
+              }
+              // Replacing writes where the old memory lives; keeping both adds the new one to the personal workspace.
+              const destination = choice === "replace" ? existing.workspace : conflict.workspace;
+              const owner = owners.get(destination);
+              if (owner === undefined) {
+                settled.lines.push(`- Not saved: "${proposed.title}" (the ${destination} workspace is no longer reachable)`);
+                continue;
+              }
+              const draft = {
+                ...proposed,
+                conflictsWithEventId: null,
+                replacesEventId: choice === "replace" ? existing.eventId : proposed.replacesEventId,
+              };
+              try {
+                const record = await saveDraft({ slug: destination, owner }, threadId, projectId, draft);
+                settled.saved.push(record);
+                replacements.push({ replacedEventId: draft.replacesEventId, record });
+                if (choice === "replace") replaced.add(existing.eventId);
+                const where = destination === conflict.workspace ? "" : ` in ${destination}`;
+                settled.lines.push(
+                  choice === "replace"
+                    ? `- "${proposed.title}" replaced "${existing.title}"${where}.`
+                    : `- Saved "${proposed.title}" and kept "${existing.title}".`,
+                );
+              } catch (cause) {
+                settled.lines.push(`- Not saved: "${proposed.title}" (${cause instanceof Error ? cause.message : String(cause)})`);
+              }
             }
-            const owner = owners.get(conflict.workspace);
-            if (owner === undefined) {
-              settled.lines.push(`- Not saved: "${proposed.title}" (the ${conflict.workspace} workspace is no longer reachable)`);
-              continue;
-            }
-            const draft = {
-              ...proposed,
-              conflictsWithEventId: null,
-              replacesEventId: choice === "replace" ? existing.eventId : proposed.replacesEventId,
-            };
-            try {
-              const record = await saveDraft({ slug: conflict.workspace, owner }, threadId, projectId, draft);
-              settled.saved.push(record);
-              replacements.push({ replacedEventId: draft.replacesEventId, record });
-              settled.lines.push(
-                choice === "replace"
-                  ? `- "${proposed.title}" replaced "${existing.title}".`
-                  : `- Saved "${proposed.title}" and kept "${existing.title}".`,
-              );
-            } catch (cause) {
-              settled.lines.push(`- Not saved: "${proposed.title}" (${cause instanceof Error ? cause.message : String(cause)})`);
-            }
+          } finally {
+            rememberWithReplacements(replacements);
           }
-          rememberWithReplacements(replacements);
+          settled.applied = true;
           return { title: "Settled a Lobu memory conflict", detail: settled.lines.join("\n") };
         },
       },
@@ -1086,6 +1122,12 @@ export default async function plugin(bb: BbPluginApi) {
     );
     if (result.outcome === "cancelled") {
       return { lines: ["The user closed the memory conflict without choosing, so those memories were not saved."], saved: [] };
+    }
+    if (!settled.applied) {
+      return {
+        lines: ["The user chose, but bb could not apply every choice; only these were saved:", ...settled.lines],
+        saved: settled.saved,
+      };
     }
     return { lines: ["The user settled the memory conflict:", ...settled.lines], saved: settled.saved };
   }
@@ -1228,7 +1270,8 @@ export default async function plugin(bb: BbPluginApi) {
         saved: outcome.saved.map(brief),
       };
     }
-    const asking = resolveConflicts(askIn, effectiveProjectId, outcome.conflicts, ctx.signal);
+    // The CLI returns before the user answers, and its request closing must not cancel the form.
+    const asking = resolveConflicts(askIn, effectiveProjectId, outcome.conflicts, ctx.ask === "wait" ? ctx.signal : undefined);
     if (ctx.ask === "open") {
       asking.catch((cause: unknown) => bb.log.warn(`Lobu memory conflict failed: ${String(cause)}`));
       const pending = outcome.conflicts.map(({ proposed, existing }) => `- "${proposed.title}" contradicts "${existing.title}"`);
