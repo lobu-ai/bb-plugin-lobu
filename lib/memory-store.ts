@@ -39,8 +39,8 @@ const MAX_THREAD_LOG_BYTES = 200_000;
 const MAX_SAVED_BYTES = 200_000;
 /** threadId of memories read from Lobu rather than saved by this plugin. */
 const HYDRATED_THREAD = "lobu";
-/** bb truncates a plugin's thread instructions at 4096 characters; stay under it. */
-const BRIEF_BUDGET = 3800;
+/** bb truncates a plugin's thread instructions at 4096 characters; stay under it with room for the view directive hint. */
+const BRIEF_BUDGET = 3500;
 const ITEM_CHARS = 320;
 const MAX_LEARNED_IN_BRIEF = 8;
 

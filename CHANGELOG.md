@@ -16,6 +16,9 @@
 - **Recap archived threads** is on by default.
 - The list of saved memories bb keeps stays under bb's storage limit; the
   plugin's own saves are kept before memories synced from Lobu.
+- Agents can show a Lobu view inline with `::lobu-view{workspace="…" view="…"}`
+  on its own line. The view opens with the login bb uses, renders in a
+  sandboxed frame, and may only run reads and its own declared actions.
 
 ## 0.9.0
 

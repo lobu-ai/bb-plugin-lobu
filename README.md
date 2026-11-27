@@ -154,6 +154,16 @@ seconds. Reading a tab's text is read-only and bounded; if the
 browser is asleep or the page refuses, the reference falls back to its title
 and URL.
 
+## Lobu views in chat
+
+An agent can show a Lobu view inline by writing
+`::lobu-view{workspace="<slug>" view="<key>"}` on its own line in a reply.
+`scope-event`, `scope-entity` or `scope-type` open the view on that subject,
+and any other attribute sets a view param. The plugin server opens the view
+with the login bb uses, so no token reaches the page, and renders it in a
+sandboxed frame. The view may run reads and its own declared actions; any
+other tool call is refused. Links to Lobu records open their Lobu page.
+
 ## Requirements
 
 - bb 0.46 or newer.
