@@ -1,19 +1,9 @@
-// Save to Lobu: turns reviewed drafts into Lobu memories with save_memory,
-// through the user's CLI login.
+// Save to Lobu helpers shared by the server's save paths: drafts from picked
+// text, view links, and idempotency keys.
 import { createHash } from "node:crypto";
-import type { MemoryDraft, RememberSubmission } from "./memory-contract";
-import type { LobuApi } from "./lobu-api";
-import type { WorkspaceOwner } from "./workspaces";
+import type { MemoryDraft } from "./memory-contract";
 
 const TITLE_MAX = 80;
-
-export interface SaveOutcome {
-  workspace: string;
-  saved: { eventId: number; title: string; url: string | null; entityIds?: number[]; replacedEventId?: number }[];
-  failed: { title: string; error: string }[];
-  /** Why an id was not linked, for the agent. */
-  unlinked: string[];
-}
 
 /** A draft from text the user picked in the timeline: first line as title, the rest as content. */
 export function draftFromText(text: string): MemoryDraft {
@@ -27,50 +17,13 @@ export function draftFromText(text: string): MemoryDraft {
   };
 }
 
-/** The remembered choice when it is still available, else the personal workspace, else the first. */
-export function pickWorkspace(owners: Map<string, WorkspaceOwner>, preferred: string | null): string | null {
-  if (preferred !== null && owners.has(preferred)) return preferred;
-  for (const [slug, owner] of owners) if (owner.personal) return slug;
-  return owners.keys().next().value ?? null;
-}
-
-/** A draft's workspace hint matched to a granted workspace, by slug then case-insensitive name. */
-export function matchWorkspaceHint(owners: Map<string, WorkspaceOwner>, hint: string | null | undefined): string | null {
-  if (hint === null || hint === undefined) return null;
-  const text = hint.trim();
-  if (text === "") return null;
-  if (owners.has(text)) return text;
-  const lower = text.toLowerCase();
-  for (const [slug, owner] of owners) {
-    if (slug.toLowerCase() === lower || owner.name.toLowerCase() === lower) return slug;
-  }
-  return null;
-}
-
-/** A unanimous valid hint wins; otherwise the remembered choice, with a note when hints disagree. */
-export function pickWorkspaceWithHints(
-  owners: Map<string, WorkspaceOwner>,
-  preferred: string | null,
-  hints: readonly (string | null | undefined)[],
-): { workspace: string | null; note: string | null } {
-  const matched = hints.map((hint) => matchWorkspaceHint(owners, hint));
-  const distinct = [...new Set(matched.filter((slug): slug is string => slug !== null))];
-  if (distinct.length === 1) return { workspace: distinct[0], note: null };
-  const workspace = pickWorkspace(owners, preferred);
-  if (distinct.length === 0) return { workspace, note: null };
-  return {
-    workspace,
-    note: `Drafts suggest different workspaces (${distinct.sort().join(", ")}); check before saving.`,
-  };
-}
-
 /** Lobu returns view links relative to its URL on some routes. */
 export function absoluteUrl(viewUrl: string | null, baseUrl: string): string | null {
   if (viewUrl === null) return null;
   return viewUrl.startsWith("http") ? viewUrl : baseUrl + viewUrl;
 }
 
-/** Same thread, workspace, and text saves once, even if the form is submitted twice. */
+/** Same thread, workspace, and text saves once, even when a save is retried. */
 export function idempotencyKey(threadId: string, workspace: string, memory: MemoryDraft): string {
   const replaces = memory.replacesEventId ? `\nreplaces:${memory.replacesEventId}` : "";
   const ids = [...new Set(memory.entityIds ?? [])].sort((a, b) => a - b);
@@ -79,84 +32,4 @@ export function idempotencyKey(threadId: string, workspace: string, memory: Memo
     .update(`${threadId}\n${workspace}\n${memory.title}\n${memory.content}${replaces}${entities}`)
     .digest("hex");
   return `bb-plugin-lobu:${digest}`;
-}
-
-export async function saveMemories(
-  api: LobuApi,
-  owner: WorkspaceOwner,
-  baseUrl: string,
-  threadId: string,
-  submission: RememberSubmission,
-): Promise<SaveOutcome> {
-  const { workspace } = submission;
-  const results = await Promise.all(
-    submission.memories.map(async (memory) => {
-      try {
-        const ids = [...new Set(memory.entityIds ?? [])];
-        const saved = await api.saveMemory(owner.context, workspace, {
-          title: memory.title,
-          content: memory.content,
-          semantic_type: memory.kind,
-          idempotency_key: idempotencyKey(threadId, workspace, memory),
-          ...(memory.replacesEventId ? { supersedes_event_id: memory.replacesEventId } : {}),
-          ...(ids.length > 0 ? { entity_ids: ids } : {}),
-        });
-        return {
-          ok: true as const,
-          eventId: saved.id,
-          title: memory.title,
-          url: absoluteUrl(saved.viewUrl, baseUrl),
-          entityIds: saved.entityIds,
-          ...(memory.replacesEventId ? { replacedEventId: memory.replacesEventId } : {}),
-        };
-      } catch (cause) {
-        return { ok: false as const, title: memory.title, error: cause instanceof Error ? cause.message : String(cause) };
-      }
-    }),
-  );
-  return {
-    workspace,
-    saved: results
-      .filter((r) => r.ok)
-      .map(({ eventId, title, url, entityIds, replacedEventId }) => ({
-        eventId,
-        title,
-        url,
-        ...(entityIds ? { entityIds } : {}),
-        ...(replacedEventId === undefined ? {} : { replacedEventId }),
-      })),
-    failed: results.filter((r) => !r.ok).map(({ title, error }) => ({ title, error })),
-    unlinked: [],
-  };
-}
-
-const plural = (count: number) => `${count} ${count === 1 ? "memory" : "memories"}`;
-
-/** The timeline row the form leaves behind. */
-export function describeOutcome(outcome: SaveOutcome): { title: string; detail: string } {
-  const { saved, failed, workspace } = outcome;
-  const title =
-    saved.length === 0 && failed.length === 0
-      ? "Saved nothing to Lobu"
-      : failed.length === 0
-        ? `Saved ${plural(saved.length)} to ${workspace}`
-        : `Saved ${saved.length} of ${saved.length + failed.length} memories to ${workspace}`;
-  const lines = [
-    ...saved.map((m) => {
-      const link = m.url === null ? m.title : `[${m.title}](${m.url})`;
-      const entities = m.entityIds && m.entityIds.length > 0 ? ` (entities: ${m.entityIds.join(", ")})` : "";
-      return `- ${link}${entities}`;
-    }),
-    ...failed.map((m) => `- Not saved: ${m.title} (${m.error})`),
-  ];
-  return { title, detail: lines.join("\n") };
-}
-
-/** What the agent hears back from lobu_remember. */
-export function outcomeForAgent(outcome: SaveOutcome | null): string {
-  if (outcome === null) return "The user chose not to save these memories. Do not propose them again.";
-  const { title, detail } = describeOutcome(outcome);
-  if (detail === "") return `${title}. The user unticked every proposed memory.`;
-  const unlinked = outcome.unlinked.length > 0 ? `\nLeft unlinked:\n${outcome.unlinked.map((line) => `- ${line}`).join("\n")}` : "";
-  return `${title}:\n${detail}${unlinked}`;
 }

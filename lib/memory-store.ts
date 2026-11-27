@@ -35,6 +35,10 @@ const MAX_TITLE_CHARS = 200;
 const MAX_QUERY_CHARS = 200;
 /** Headroom under the 256KB limit, leaving room for the other KV keys' values. */
 const MAX_THREAD_LOG_BYTES = 200_000;
+/** The same headroom for saved memories, which carry their full text. */
+const MAX_SAVED_BYTES = 200_000;
+/** threadId of memories read from Lobu rather than saved by this plugin. */
+const HYDRATED_THREAD = "lobu";
 /** bb truncates a plugin's thread instructions at 4096 characters; stay under it. */
 const BRIEF_BUDGET = 3800;
 const ITEM_CHARS = 320;
@@ -76,7 +80,43 @@ export function parseThreadLogs(value: unknown): Record<string, ThreadLog> {
 /** Newest first, capped. */
 export function addSaved(list: SavedRecord[], records: SavedRecord[]): SavedRecord[] {
   const ids = new Set(records.map((record) => record.eventId));
-  return [...records, ...list.filter((record) => !ids.has(record.eventId))].slice(0, MAX_SAVED);
+  return capSaved([...records, ...list.filter((record) => !ids.has(record.eventId))]);
+}
+
+/**
+ * Keeps saved memories inside the plugin KV value limit (256KB) and MAX_SAVED,
+ * in their order. Memories this plugin saved win over ones read back from Lobu,
+ * which Lobu still holds and the next sync can read again.
+ */
+export function capSaved(list: SavedRecord[]): SavedRecord[] {
+  const kept = new Set<SavedRecord>();
+  let bytes = 2; // "[]"
+  const own = list.filter((record) => record.threadId !== HYDRATED_THREAD);
+  const hydrated = list.filter((record) => record.threadId === HYDRATED_THREAD);
+  for (const record of [...own, ...hydrated]) {
+    if (kept.size >= MAX_SAVED) break;
+    const size = JSON.stringify(record).length + 1;
+    if (bytes + size > MAX_SAVED_BYTES) continue;
+    bytes += size;
+    kept.add(record);
+  }
+  return kept.size === list.length ? list : list.filter((record) => kept.has(record));
+}
+
+/**
+ * The live memory an event id stands for in a read_knowledge lineage result,
+ * following supersede chains to the head; null when it was deleted or is missing.
+ */
+export function liveMemory(result: unknown, eventId: number): { id: number; title: string; content: string } | null {
+  const byId = new Map(parseKnowledgeItems(result).map((item) => [item.id, item]));
+  let cur = byId.get(eventId);
+  const seen = new Set<number>();
+  while (cur !== undefined && cur.supersededBy !== null && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    cur = byId.get(cur.supersededBy);
+  }
+  if (cur === undefined || cur.isSuperseded || cur.semanticType === "tombstone" || cur.kind === null) return null;
+  return { id: cur.id, title: cur.title, content: cur.content };
 }
 
 /**
@@ -581,7 +621,7 @@ export function reconcileWorkspaceMemories(input: {
         content: item.content,
         kind: item.kind as MemoryKind,
         url: `${baseUrl}/${workspace}/events/${item.id}`,
-        threadId: "lobu",
+        threadId: HYDRATED_THREAD,
         projectId: null,
         entityIds: item.entityIds ?? null,
         savedAt: item.savedAt,
@@ -590,12 +630,11 @@ export function reconcileWorkspaceMemories(input: {
       });
     }
     if (hydrated.length > 0) {
-      saved = [...saved, ...hydrated]
-        .sort((a, b) => b.savedAt - a.savedAt)
-        .slice(0, MAX_SAVED);
-      changed = true;
+      saved = [...saved, ...hydrated].sort((a, b) => b.savedAt - a.savedAt);
     }
   }
 
-  return { saved, pins, changed };
+  const capped = capSaved(saved);
+  const differs = capped.length !== input.saved.length || capped.some((record, index) => record !== input.saved[index]);
+  return { saved: capped, pins, changed: changed || differs };
 }

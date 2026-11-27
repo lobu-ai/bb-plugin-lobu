@@ -130,7 +130,7 @@ export const rpcContract = defineRpcContract({
     input: z.object({ records: z.array(z.object({ workspace: z.string(), id: z.number().int().positive() })).max(200) }),
     output: z.object({ records: z.array(linkedEntitySchema) }),
   },
-  /** Opens the review form in a thread with text the user picked. */
+  /** Saves text the user picked in a thread to their personal workspace. */
   remember: {
     input: z.object({ threadId: z.string(), text: z.string().min(1) }),
     output: rememberResultSchema,

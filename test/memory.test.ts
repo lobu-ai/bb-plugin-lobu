@@ -1,38 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { rememberSubmissionSchema, memoryDraftSchema, memoryProposalSchema } from "../lib/memory-contract";
-import type { LobuApi, SaveMemoryInput } from "../lib/lobu-api";
-import {
-  describeOutcome,
-  draftFromText,
-  idempotencyKey,
-  matchWorkspaceHint,
-  outcomeForAgent,
-  pickWorkspace,
-  pickWorkspaceWithHints,
-  saveMemories,
-} from "../lib/memory";
-import type { WorkspaceOwner } from "../lib/workspaces";
-
-const BASE = "https://lobu.example";
-const owner = (overrides: Partial<WorkspaceOwner> = {}): WorkspaceOwner => ({
-  context: null,
-  name: "Acme",
-  personal: false,
-  ...overrides,
-});
-
-function fakeApi(fail: (memory: SaveMemoryInput) => boolean = () => false) {
-  const saves: { context: string | null; workspace: string; memory: SaveMemoryInput }[] = [];
-  const api = {
-    saveMemory: async (context: string | null, workspace: string, memory: SaveMemoryInput) => {
-      saves.push({ context, workspace, memory });
-      if (fail(memory)) throw new Error("semantic_type rejected");
-      return { id: saves.length, viewUrl: `/${workspace}/events?id=${saves.length}`, entityIds: memory.entity_ids ?? [] };
-    },
-  } as unknown as LobuApi;
-  return { api, saves };
-}
-
+import { memoryDraftSchema, memoryProposalSchema } from "../lib/memory-contract";
+import { draftFromText, idempotencyKey } from "../lib/memory";
 describe("draftFromText", () => {
   test("uses the first non-empty line as the title", () => {
     expect(draftFromText("\n  Lobu rejects bound tokens on REST\nUse MCP instead.")).toEqual({
@@ -47,43 +15,6 @@ describe("draftFromText", () => {
     expect(draft.title).toHaveLength(80);
     expect(draft.title.endsWith("…")).toBe(true);
     expect(draft.content).toHaveLength(200);
-  });
-});
-
-describe("pickWorkspace", () => {
-  const owners = new Map([
-    ["acme", owner()],
-    ["me", owner({ personal: true })],
-  ]);
-  test("prefers the remembered choice, then the personal workspace, then the first", () => {
-    expect(pickWorkspace(owners, "acme")).toBe("acme");
-    expect(pickWorkspace(owners, "gone")).toBe("me");
-    expect(pickWorkspace(new Map([["acme", owner()]]), null)).toBe("acme");
-    expect(pickWorkspace(new Map(), null)).toBeNull();
-  });
-});
-
-describe("workspace hints", () => {
-  const owners = new Map([
-    ["acme", owner({ name: "Acme Corp" })],
-    ["me", owner({ personal: true })],
-  ]);
-  test("matches by slug, then case-insensitive name", () => {
-    expect(matchWorkspaceHint(owners, "acme")).toBe("acme");
-    expect(matchWorkspaceHint(owners, "acme corp")).toBe("acme");
-    expect(matchWorkspaceHint(owners, "ME")).toBe("me");
-    expect(matchWorkspaceHint(owners, "unknown")).toBeNull();
-    expect(matchWorkspaceHint(owners, null)).toBeNull();
-    expect(matchWorkspaceHint(owners, "  ")).toBeNull();
-  });
-  test("a unanimous hint wins; disagreement falls back with a note", () => {
-    expect(pickWorkspaceWithHints(owners, "me", ["acme", null])).toEqual({ workspace: "acme", note: null });
-    expect(pickWorkspaceWithHints(owners, null, [null, undefined])).toEqual({ workspace: "me", note: null });
-    expect(pickWorkspaceWithHints(owners, null, ["acme", "me"])).toEqual({
-      workspace: "me",
-      note: "Drafts suggest different workspaces (acme, me); check before saving.",
-    });
-    expect(pickWorkspaceWithHints(owners, null, ["unknown"])).toEqual({ workspace: "me", note: null });
   });
 });
 
@@ -115,75 +46,20 @@ describe("proposal schemas", () => {
     expect(withSnake.success).toBe(true);
     if (withSnake.success) expect(withSnake.data.entityIds).toEqual([123]);
   });
-});
-
-describe("saveMemories", () => {
-  const submission = rememberSubmissionSchema.parse({
-    workspace: "acme",
-    memories: [
-      { title: "Use bun", content: "The repo blocks npm.", kind: "preference" },
-      { title: "Bad kind", content: "This one fails.", kind: "fact" },
-    ],
-  });
-
-  test("saves each kept memory with its kind and reports failures per memory", async () => {
-    const { api, saves } = fakeApi((memory) => memory.title === "Bad kind");
-    const outcome = await saveMemories(api, owner({ context: "work" }), BASE, "thread-1", submission);
-    expect(saves.map((s) => [s.context, s.workspace, s.memory.semantic_type])).toEqual([
-      ["work", "acme", "preference"],
-      ["work", "acme", "fact"],
-    ]);
-    expect(outcome).toEqual({
-      workspace: "acme",
-      saved: [{ eventId: 1, title: "Use bun", url: `${BASE}/acme/events?id=1`, entityIds: [] }],
-      failed: [{ title: "Bad kind", error: "semantic_type rejected" }],
-      unlinked: [],
-    });
-    expect(describeOutcome(outcome)).toEqual({
-      title: "Saved 1 of 2 memories to acme",
-      detail: `- [Use bun](${BASE}/acme/events?id=1)\n- Not saved: Bad kind (semantic_type rejected)`,
-    });
-  });
-
-  test("sends a stable idempotency key so a resubmit cannot duplicate", async () => {
-    const first = fakeApi();
-    const second = fakeApi();
-    await saveMemories(first.api, owner(), BASE, "thread-1", submission);
-    await saveMemories(second.api, owner(), BASE, "thread-1", submission);
-    expect(first.saves.map((s) => s.memory.idempotency_key)).toEqual(second.saves.map((s) => s.memory.idempotency_key));
-    const [a, b] = first.saves;
-    expect(a?.memory.idempotency_key).not.toBe(b?.memory.idempotency_key);
-    expect(idempotencyKey("thread-2", "acme", submission.memories[0]!)).not.toBe(a?.memory.idempotency_key);
-  });
-
-  test("sends only record ids as entity_ids", async () => {
-    const { api, saves } = fakeApi();
-    const entitySubmission = rememberSubmissionSchema.parse({
-      workspace: "acme",
-      memories: [
-        {
-          title: "Project rule",
-          content: "Link to repo",
-          kind: "fact",
-          entityIds: [10, 20, 10],
-        },
-      ],
-    });
-    const outcome = await saveMemories(api, owner(), BASE, "thread-1", entitySubmission);
-    expect(saves[0]?.memory.entity_ids).toEqual([10, 20]);
-    expect(outcome.saved[0]?.entityIds).toEqual([10, 20]);
-    expect(describeOutcome(outcome).detail).toContain("(entities: 10, 20)");
+  test("accepts the event id of a memory the proposal contradicts", () => {
+    const parsed = memoryProposalSchema.safeParse({ ...legacy, evidence: "User: staging moved", conflictsWithEventId: 42 });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.conflictsWithEventId).toBe(42);
   });
 });
 
-describe("outcomeForAgent", () => {
-  test("tells the agent what happened", () => {
-    expect(outcomeForAgent(null)).toContain("chose not to save");
-    expect(outcomeForAgent({ workspace: "acme", saved: [], failed: [], unlinked: [] })).toBe(
-      "Saved nothing to Lobu. The user unticked every proposed memory.",
-    );
-    expect(outcomeForAgent({ workspace: "acme", saved: [{ eventId: 1, title: "Use bun", url: null }], failed: [], unlinked: [] })).toBe(
-      "Saved 1 memory to acme:\n- Use bun",
+describe("idempotencyKey", () => {
+  const memory = { title: "Use bun", content: "The repo blocks npm.", kind: "preference" as const };
+  test("is stable for the same thread, workspace, and memory, so a retry cannot duplicate", () => {
+    expect(idempotencyKey("thread-1", "acme", memory)).toBe(idempotencyKey("thread-1", "acme", { ...memory }));
+    expect(idempotencyKey("thread-2", "acme", memory)).not.toBe(idempotencyKey("thread-1", "acme", memory));
+    expect(idempotencyKey("thread-1", "acme", { ...memory, replacesEventId: 7 })).not.toBe(
+      idempotencyKey("thread-1", "acme", memory),
     );
   });
 });

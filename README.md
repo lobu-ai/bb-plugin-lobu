@@ -93,9 +93,13 @@ It works as a loop:
   a record in the destination workspace is dropped, and the agent is told
   what each memory linked to, with the record's type. The plugin never
   creates entities. Passing `replacesEventId` (`--replaces-id`) supersedes an outdated
-  memory instead of leaving both active. With **Save memories automatically**
-  on (the default), saves go straight to your personal workspace, and anything
-  Lobu already holds is skipped. With it off, a review form opens first.
+  memory instead of leaving both active. Saves go straight to your personal
+  workspace without asking, and anything Lobu already holds is skipped. You
+  are asked only when a new memory contradicts a saved one and the
+  conversation does not show which is right: the agent passes
+  `conflictsWithEventId` (`--conflicts-with-id`), and a form above the
+  composer shows both memories, so you can use the new one, keep both, or keep
+  the saved one. Nothing is saved until you choose.
 
 You see it in the thread's **Lobu memory panel**. Open it from the side
 panel's new-tab menu. It shows what the thread started with, what the agent
@@ -121,15 +125,15 @@ following your bb browser setting.
 
 You can still save by hand. Hover any message and choose **Save to Lobu**, or
 highlight part of an answer and pick **Save to Lobu** from the selection
-menu; a review form opens with that text. **Save learnings to Lobu** in the
-thread's ⋯ menu asks the agent to look back over the thread.
+menu; that text is saved to your personal workspace and appears in the
+thread's Lobu memory panel. **Save learnings to Lobu** in the thread's ⋯ menu
+asks the agent to look back over the thread.
 
-![The review form, with two memories proposed from a thread](docs/screenshots/save-to-lobu.jpg)
-
-**Recap archived threads**, off by default, has a hidden agent with the
+**Recap archived threads**, on by default, has a hidden agent with the
 archived thread's own provider read each thread you archive and save its
-memories like any other. It needs auto-save on, since nobody reviews a form in
-an archived thread. Each recap is one agent turn.
+memories like any other. Nobody is looking at an archived thread, so a recap
+saves what does not conflict and leaves contradictions unsaved. Each recap is
+one agent turn.
 
 Agents pick up new tools and the brief when their session starts, so threads
 that were already open before you installed or updated the plugin need a new
@@ -191,8 +195,7 @@ Open them in bb under Settings → Plugins → Lobu, or use `bb plugin config lo
 
 | Setting | Default | Description |
 |---|---|---|
-| `autoSave` | `true` | Save what agents learn to your personal workspace without asking. Off opens a review form for every save. |
-| `recapOnArchive` | `false` | Recap threads when you archive them, with the thread's own provider, and save what they learned. Needs `autoSave`. |
+| `recapOnArchive` | `true` | Recap threads when you archive them, with the thread's own provider, and save what they learned. |
 
 ## Notes
 

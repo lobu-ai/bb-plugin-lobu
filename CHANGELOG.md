@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Memories save without asking. The `autoSave` setting and the review form are
+  gone; hovering a message and choosing **Save to Lobu** saves it directly.
+- You are asked only on a contradiction: an agent passes
+  `conflictsWithEventId` (`--conflicts-with-id`) naming the saved memory a new
+  one contradicts, and a form shows both so you can replace it, keep both, or
+  keep the saved one. Nothing is saved until you choose.
+- Automatic saves go to your personal workspace only. The `workspace` field
+  and the CLI `--workspace` option are removed; share to a team workspace from
+  the thread panel.
+- **Recap archived threads** is on by default.
+- The list of saved memories bb keeps stays under bb's storage limit; the
+  plugin's own saves are kept before memories synced from Lobu.
+
 ## 0.9.0
 
 - Memories link to Lobu records only by ids the agent was shown, never by
