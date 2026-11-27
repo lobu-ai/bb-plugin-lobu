@@ -505,7 +505,8 @@ const prPreference = {
 describe("the memory loop", () => {
   test("saves, dedupes, briefs, counts uses, links, pins notes, and undoes", async () => {
     const { rpc, call, brief } = await startPlugin();
-    expect(brief("thread-0")).toBeNull();
+    // Nothing is learned yet, so the thread gets no memory brief (only the view hint once the login is checked).
+    expect(brief("thread-0") ?? "").not.toContain("## Lobu memory");
 
     // Saves go to the personal workspace without asking.
     const saved = String(await call("lobu_remember", { memories: [deployGotcha, prPreference] }));
