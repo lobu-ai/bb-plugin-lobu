@@ -55,6 +55,8 @@ are starting a thread in:
   what it started with, what it looked up, and what it saved, with a link to
   everything bb saved in Lobu.
 
+![The New thread screen with the Lobu Inbox, what new threads in the project start with, and its recent sessions](docs/screenshots/new-thread-memory.jpg)
+
 Inside a thread, the Lobu panel shows the same for that thread. Switch the
 login bb uses in Settings → Plugins → Lobu; search all of Lobu in Lobu itself.
 
@@ -115,8 +117,6 @@ Before a thread exists, bb's New thread screen shows the same brief for the
 project picked in the composer: one line saying what a new thread there will
 start with, which opens the same project controls. Threads started with
 "Don't work in a project" share bb's Personal project brief.
-
-![The New thread screen's Lobu memory line for the project picked in the composer](docs/screenshots/new-thread-memory.jpg)
 
 To see everything bb saved, choose **See everything bb saved in Lobu** in the
 panel, or **Open what bb saved in Lobu** in the thread's ⋯ menu. Both open
