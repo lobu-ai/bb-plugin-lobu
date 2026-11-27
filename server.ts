@@ -10,7 +10,7 @@ import { z } from "zod";
 import { rpcContract, type SetupStatus } from "./lib/contract";
 import { CLI_MAJOR, FALLBACK_INSTALL, LobuSetupError, userHome } from "./lib/cli";
 import type { ChildProcess } from "node:child_process";
-import { createLobuApi, kindOfOrigin, lobuOrigin, pickCloudContext, pickOriginContext, type AutomationItem, type CliContext, type ConnectionItem, type DeviceItem, type FeedItem, type TabItem } from "./lib/lobu-api";
+import { createLobuApi, kindOfOrigin, type LobuApi, lobuOrigin, pickCloudContext, pickOriginContext, type AutomationItem, type CliContext, type ConnectionItem, type DeviceItem, type FeedItem, type TabItem } from "./lib/lobu-api";
 import { hasProject, isServing, lastLogLine, LOCAL_CONTEXT, localFolders, localPort, macAppOwnsLocal, startLocal } from "./lib/local";
 import {
   type BriefItem,
@@ -1152,8 +1152,8 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   /** A REST tool call's JSON answer; a refusal throws with Lobu's own message. */
-  async function lobuJson(context: string | null, path: string, body: unknown): Promise<unknown> {
-    const { ok, status, json } = await api.callJson(context, path, body);
+  async function lobuJson(client: LobuApi, context: string | null, path: string, body: unknown): Promise<unknown> {
+    const { ok, status, json } = await client.callJson(context, path, body);
     if (ok) return json;
     const answer = json as { error?: unknown } | null;
     throw new Error(typeof answer?.error === "string" && answer.error !== "" ? answer.error : `Lobu returned ${status}`);
@@ -2460,11 +2460,13 @@ export default async function plugin(bb: BbPluginApi) {
     },
     viewOpen: async ({ workspace, view, scope, params }) => {
       const owner = ownerOf((await reachLobu()).owners, workspace);
+      // A login change swaps `api` mid-call; the owner's token must stay with the origin it belongs to.
+      const client = api;
       const tool = (name: string) => `/api/${encodeURIComponent(workspace)}/${name}`;
       // `open_view` takes a stored id; a source key is read the way its record page reads it.
       let subject: ViewScope = scope;
       if (typeof scope.entity === "string") {
-        const found = (await lobuJson(owner.context, tool("manage_entity"), {
+        const found = (await lobuJson(client, owner.context, tool("manage_entity"), {
           action: "get",
           entity_id: scope.entity,
           entity_type: scope.type,
@@ -2475,18 +2477,18 @@ export default async function plugin(bb: BbPluginApi) {
       }
       let typed = params;
       if (Object.values(params).some((value) => typeof value === "string")) {
-        const listing = (await lobuJson(owner.context, tool("manage_views"), { action: "list" })) as {
+        const listing = (await lobuJson(client, owner.context, tool("manage_views"), { action: "list" })) as {
           views?: Array<{ key?: unknown; params?: unknown }>;
         } | null;
         typed = coerceViewParams(listing?.views?.find((entry) => entry.key === view)?.params, params);
       }
-      const opened = (await lobuJson(owner.context, tool("open_view"), { key: view, scope: subject, params: typed })) as {
+      const opened = (await lobuJson(client, owner.context, tool("open_view"), { key: view, scope: subject, params: typed })) as {
         scope?: ViewScope;
         params?: Record<string, string | number | boolean>;
         url?: unknown;
       } | null;
       if (typeof opened?.url !== "string") throw new Error(`Lobu could not open the ${view} view.`);
-      const shell = await api.viewShell(owner.context, workspace, view);
+      const shell = await client.viewShell(owner.context, workspace, view);
       // The guest sees the subject it was named by; Lobu has checked it.
       const resolved = { ...(opened.scope ?? {}), ...(typeof scope.entity === "string" ? { entity: scope.entity } : {}) };
       return { ...shell, url: opened.url, scope: resolved, params: opened.params ?? typed };
@@ -2494,7 +2496,7 @@ export default async function plugin(bb: BbPluginApi) {
     viewOpenRecord: async ({ workspace, record }) => {
       const { origin, owners } = await reachLobu();
       const owner = ownerOf(owners, workspace);
-      const found = (await lobuJson(owner.context, `/api/${encodeURIComponent(workspace)}/manage_entity`, {
+      const found = (await lobuJson(api, owner.context, `/api/${encodeURIComponent(workspace)}/manage_entity`, {
         ...record,
         action: "get",
       })) as { entity?: { view_url?: unknown } } | null;
@@ -2504,6 +2506,7 @@ export default async function plugin(bb: BbPluginApi) {
     },
     viewCall: async ({ workspace, view, contentHash, event, name, arguments: args }) => {
       const owner = ownerOf(await memoryOwners(), workspace);
+      const client = api;
       const mounted = { workspace, view, contentHash, title: view, ...(event === undefined ? {} : { event }) };
       let planned = viewCallRequest(mounted, name, args, new Set());
       // Only a tool outside the fixed reads needs the registry's read-only list.
@@ -2511,7 +2514,7 @@ export default async function plugin(bb: BbPluginApi) {
         planned = viewCallRequest(mounted, name, args, await readOnlyTools(owner.context, workspace));
       }
       if ("error" in planned) return { content: [{ type: "text" as const, text: planned.error }], isError: true };
-      const { ok, status, json } = await api.callJson(owner.context, planned.path, planned.body);
+      const { ok, status, json } = await client.callJson(owner.context, planned.path, planned.body);
       if (!ok) {
         const answer = json as { error?: unknown; code?: unknown } | null;
         const message = typeof answer?.error === "string" && answer.error !== "" ? answer.error : `API error: ${status}`;

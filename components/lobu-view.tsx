@@ -113,7 +113,7 @@ interface ViewFrameProps {
   /** The view keys above this frame, outermost first. */
   ancestry: readonly string[];
   /** The view's Lobu page, once opened. */
-  onOpened?: (url: string) => void;
+  onOpened?: (url: string | null) => void;
   /** Set for an embedded view, which fills the slot its parent sized for it. */
   embedded?: {
     onHeight: (height: number) => void;
@@ -151,6 +151,8 @@ function ViewFrame({ workspace, view, scope, params, ancestry, onOpened, embedde
     setOpened(null);
     setFailure(null);
     setEmbeds([]);
+    // The previous target's page must not stay linked while this one opens or fails.
+    onOpenedRef.current?.(null);
     rpc
       .call("viewOpen", JSON.parse(request))
       .then((next) => {
@@ -217,7 +219,10 @@ function ViewFrame({ workspace, view, scope, params, ancestry, onOpened, embedde
           } catch {
             parsed = null;
           }
-          if (parsed === null || parsed.protocol !== "https:") return { isError: true };
+          // HTTPS anywhere; plain HTTP only to the Lobu the view came from (a local install).
+          if (parsed === null) return { isError: true };
+          const local = parsed.protocol === "http:" && parsed.origin === new URL(opened.url).origin;
+          if (parsed.protocol !== "https:" && !local) return { isError: true };
           openPage(parsed.href);
           return {};
         }
